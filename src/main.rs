@@ -17,12 +17,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MSG, PostQuitMessage, SetTimer, TranslateMessage, WM_TIMER,
+    DispatchMessageW, GetMessageW, KillTimer, MSG, PostQuitMessage, SetTimer, TranslateMessage,
+    WM_TIMER,
 };
 
 use session::{IconState, Registry};
 
-const TIMER_ID: usize = 1;
 const TICK_MS: u32 = 1_000;
 const EXIT_ID: &str = "claude-tray-exit";
 
@@ -43,6 +43,8 @@ struct Ui {
     icon_state: Option<IconState>,
     rows: Vec<String>,
     tooltip: String,
+    /// The builder ships no menu, so the first apply has to install one even if it is empty.
+    menu_installed: bool,
 }
 
 impl Ui {
@@ -52,6 +54,7 @@ impl Ui {
             icon_state: None,
             rows: Vec::new(),
             tooltip: String::new(),
+            menu_installed: false,
         }
     }
 
@@ -69,9 +72,10 @@ impl Ui {
         }
 
         // Elapsed times change every tick, so rows are compared as rendered text.
-        if self.rows != rows {
+        if !self.menu_installed || self.rows != rows {
             if let Some(menu) = build_menu(&header, &rows) {
                 self.tray.set_menu(Some(Box::new(menu)));
+                self.menu_installed = true;
             }
             self.rows = rows;
         }
@@ -142,7 +146,9 @@ fn main() {
         }
     }));
 
-    unsafe { SetTimer(ptr::null_mut(), TIMER_ID, TICK_MS, None) };
+    // A null hwnd makes Windows pick the timer id and ignore the one asked for, so the returned
+    // id is the only thing that will match WM_TIMER.wParam. Zero means SetTimer failed.
+    let timer_id = unsafe { SetTimer(ptr::null_mut(), 0, TICK_MS, None) };
 
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     loop {
@@ -152,12 +158,16 @@ fn main() {
         }
         // Timer messages are posted with a null hwnd, so they are handled here rather than
         // dispatched to a window procedure.
-        if msg.message == WM_TIMER && msg.wParam == TIMER_ID {
+        if timer_id != 0 && msg.message == WM_TIMER && msg.wParam == timer_id {
             tick(&mut registry, &mut ui);
         }
         unsafe {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+
+    if timer_id != 0 {
+        unsafe { KillTimer(ptr::null_mut(), timer_id) };
     }
 }
