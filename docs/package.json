@@ -1,0 +1,11 @@
+{
+  "name": "claude-tray-docs",
+  "private": true,
+  "type": "module",
+  "description": "Regenerates the README graphics from hero.html and demo.html.",
+  "scripts": { "build": "node build-graphics.mjs" },
+  "dependencies": {
+    "gifenc": "^1.0.3",
+    "pngjs": "^7.0.0"
+  }
+}

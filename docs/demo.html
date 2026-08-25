@@ -1,0 +1,169 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>claude-tray demo frame</title>
+<!--
+  Source for the frames of docs/demo.gif. Rendered one frame at a time by
+  docs/build-graphics.mjs: file:///.../demo.html?frame=N  ->  1000x360 screenshot.
+  The icon is drawn from the same 3x5 FONT table and geometry as src/icon.rs.
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1000px; height: 360px; overflow: hidden; }
+  body {
+    /* Flat, not a gradient: a GIF's 256-color palette bands badly across dark ramps. */
+    background: #121519;
+    display: grid; grid-template-columns: 268px 1fr; align-items: center; gap: 36px;
+    padding: 34px 40px;
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  .tray { display: flex; flex-direction: column; align-items: center; }
+  #icon { width: 132px; height: 132px; }
+  .tip {
+    margin-top: 26px; padding: 7px 12px; font-size: 13px; color: #E6E6E6;
+    background: #2B2B2B; border: 1px solid #454545; border-radius: 5px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.5); white-space: nowrap;
+  }
+  .menu {
+    width: 596px; background: #2B2B2B; border: 1px solid #3D3D3D; border-radius: 8px;
+    padding: 6px; box-shadow: 0 22px 54px rgba(0,0,0,.58); font-size: 17px;
+  }
+  .item { display: flex; align-items: center; height: 38px; padding: 0 13px; border-radius: 5px; white-space: nowrap; }
+  .head { color: #9AA0AA; }
+  .sep { height: 1px; background: #3D3D3D; margin: 4px 11px; }
+  .row { color: #F0F0F0; }
+  .row.hot { background: #383838; }
+  .dot { width: 24px; flex: none; font-size: 15px; line-height: 1; }
+  .w .dot { color: #E5482F; } .b .dot { color: #2E8BE0; } .i .dot { color: #9AA0AA; }
+  .i .txt { color: #9AA0AA; }
+  .exit { color: #F0F0F0; }
+</style>
+
+<div class="tray"><svg id="icon" viewBox="0 0 32 32"></svg><div class="tip" id="tip"></div></div>
+<div class="menu" id="menu"></div>
+
+<script>
+// --- src/icon.rs, ported ----------------------------------------------------
+const FONT = [
+  [0b111,0b101,0b101,0b101,0b111], [0b010,0b110,0b010,0b010,0b111],
+  [0b111,0b001,0b111,0b100,0b111], [0b111,0b001,0b111,0b001,0b111],
+  [0b101,0b101,0b111,0b001,0b001], [0b111,0b100,0b111,0b001,0b111],
+  [0b111,0b100,0b111,0b101,0b111], [0b111,0b001,0b010,0b010,0b010],
+  [0b111,0b101,0b111,0b101,0b111], [0b111,0b101,0b111,0b001,0b111],
+  [0b000,0b010,0b111,0b010,0b000]
+];
+// disc color, glyph color, draws-as-ring
+const PALETTE = {
+  waiting: ['#E5482F', '#FFFFFF', false],
+  busy:    ['#2E8BE0', '#FFFFFF', false],
+  idle:    ['#9AA0AA', '#9AA0AA', true],
+  empty:   ['#6A707A', '#6A707A', true]
+};
+
+function badgeGlyphs(n) { return n === 0 ? [] : n <= 9 ? [n] : [9, 10]; }
+
+function iconSvg(kind, count) {
+  var p = PALETTE[kind], disc = p[0], glyph = p[1], ring = p[2];
+  var out = ring
+    ? '<circle cx="16" cy="16" r="13.25" fill="none" stroke="' + disc + '" stroke-width="3.5"/>'
+    : '<circle cx="16" cy="16" r="15" fill="' + disc + '"/>';
+
+  var glyphs = badgeGlyphs(count);
+  if (glyphs.length) {
+    var scale = glyphs.length > 1 ? 2 : 3;        // two glyphs only fit at the smaller scale
+    var gw = 3 * scale, gh = 5 * scale, gap = 2;
+    var totalW = glyphs.length * gw + (glyphs.length - 1) * gap;
+    var ox = Math.floor((32 - totalW) / 2), oy = Math.floor((32 - gh) / 2);
+    out += '<g fill="' + glyph + '">';
+    for (var i = 0; i < glyphs.length; i++) {
+      var gx = ox + i * (gw + gap);
+      for (var row = 0; row < 5; row++) {
+        var bits = FONT[glyphs[i]][row], col = 0;
+        while (col < 3) {                          // merge horizontal runs, no hairline seams
+          if (!(bits & (1 << (2 - col)))) { col++; continue; }
+          var end = col;
+          while (end < 3 && (bits & (1 << (2 - end)))) end++;
+          out += '<rect x="' + (gx + col * scale) + '" y="' + (oy + row * scale) +
+                 '" width="' + ((end - col) * scale) + '" height="' + scale + '"/>';
+          col = end;
+        }
+      }
+    }
+    out += '</g>';
+  }
+  return out;
+}
+
+// --- src/render.rs::elapsed -------------------------------------------------
+function elapsed(sec) {
+  if (sec < 60) return sec + 's';
+  if (sec < 600) { var m = (sec / 60) | 0, s = sec % 60; return s ? m + 'm' + s + 's' : m + 'm'; }
+  if (sec < 3600) return ((sec / 60) | 0) + 'm';
+  var h = (sec / 3600) | 0, mm = ((sec % 3600) / 60) | 0;
+  return mm ? h + 'h' + mm + 'm' : h + 'h';
+}
+
+// --- the story --------------------------------------------------------------
+// Row = [status, name, LABEL, age-seconds, waitingFor?]. Row order is what the tray
+// would show: attention-first (waiting -> busy -> idle), oldest-first within a status.
+var BEATS = [
+  { n: 5, k: 'idle', c: 4, rows: [
+    ['i','billing-service-b4','IDLE',600], ['i','api-gateway-f6','IDLE',480],
+    ['i','web-app-16','IDLE',180], ['i','index-perf-test','IDLE',120]] },
+  { n: 3, k: 'busy', c: 1, rows: [
+    ['b','web-app-16','BUSY',1], ['i','billing-service-b4','IDLE',605],
+    ['i','api-gateway-f6','IDLE',485], ['i','index-perf-test','IDLE',125]] },
+  { n: 3, k: 'busy', c: 2, rows: [
+    ['b','web-app-16','BUSY',8], ['b','api-gateway-f6','BUSY',1],
+    ['i','billing-service-b4','IDLE',610], ['i','index-perf-test','IDLE',130]] },
+  { n: 6, k: 'waiting', c: 1, rows: [
+    ['w','api-gateway-f6','WAITING',1,'permission prompt'], ['b','web-app-16','BUSY',14],
+    ['i','billing-service-b4','IDLE',616], ['i','index-perf-test','IDLE',136]] },
+  { n: 3, k: 'busy', c: 2, rows: [
+    ['b','web-app-16','BUSY',22], ['b','api-gateway-f6','BUSY',9],
+    ['i','billing-service-b4','IDLE',624], ['i','index-perf-test','IDLE',144]] },
+  { n: 3, k: 'idle', c: 4, rows: [
+    ['i','billing-service-b4','IDLE',630], ['i','index-perf-test','IDLE',150],
+    ['i','api-gateway-f6','IDLE',3], ['i','web-app-16','IDLE',1]] }
+];
+
+var FRAMES = [];
+BEATS.forEach(function (b) {
+  for (var i = 0; i < b.n; i++) {
+    FRAMES.push({ k: b.k, c: b.c, rows: b.rows.map(function (r) {
+      return [r[0], r[1], r[2], r[3] + i, r[4]];
+    }) });
+  }
+});
+window.FRAME_COUNT = FRAMES.length;
+
+// --- src/render.rs::tooltip -------------------------------------------------
+function tooltip(rows) {
+  function c(g) { return rows.filter(function (r) { return r[0] === g; }).length; }
+  var parts = [rows.length + ' sessions'];
+  if (c('w')) parts.push(c('w') + ' waiting');
+  if (c('b')) parts.push(c('b') + ' busy');
+  if (c('i')) parts.push(c('i') + ' idle');
+  return parts.join(' · ');
+}
+
+var GLYPH = { w: '●', b: '◐', i: '○' };
+
+function draw(f) {
+  document.getElementById('icon').innerHTML = iconSvg(f.k, f.c);
+  document.getElementById('tip').textContent = tooltip(f.rows);
+  var rows = f.rows.map(function (r) {
+    var g = r[0], name = r[1], label = r[2], age = r[3], why = r[4];
+    return '<div class="item row ' + g + (g === 'w' ? ' hot' : '') + '">' +
+           '<span class="dot">' + GLYPH[g] + '</span><span class="txt">' +
+           name + ' — ' + label + ' ' + elapsed(age) +
+           (why ? ' · ' + why : '') + '</span></div>';
+  }).join('');
+  document.getElementById('menu').innerHTML =
+    '<div class="item head">' + f.rows.length + ' Claude sessions</div><div class="sep"></div>' +
+    rows + '<div class="sep"></div><div class="item exit">Exit</div>';
+}
+
+var want = parseInt(new URLSearchParams(location.search).get('frame'), 10) || 0;
+draw(FRAMES[Math.min(want, FRAMES.length - 1)]);
+</script>

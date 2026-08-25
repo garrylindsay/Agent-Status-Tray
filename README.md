@@ -1,5 +1,8 @@
 # claude-tray
 
+<img src="docs/hero.png" width="900"
+  alt="claude-tray: a red tray icon badged 2, beside the session menu listing one waiting, one busy and two idle Claude Code sessions">
+
 Tray-resident status for every running Claude Code session on this machine. Tells you at a glance
 — without focusing the terminal — how many sessions are running and whether any of them is blocked
 waiting on you.
@@ -10,20 +13,14 @@ Display only. It never writes to Claude Code's files and never sends it anything
 tray icon:  ( 2 )   red disc   -> 2 sessions waiting on you
             ( 1 )   blue disc  -> 1 session working, none blocked
             ( 4 )   gray ring  -> 4 sessions, all idle
-
-click the icon:
-  4 Claude sessions
-  ─────────────────────────────────────────────────────
-  ● api-gateway-f6 — WAITING 4m · permission prompt
-  ◐ web-app-16 — BUSY 1m12s
-  ○ billing-service-b4 — IDLE 10m
-  ○ index-perf-test — IDLE 2m
-  ─────────────────────────────────────────────────────
-  Exit
 ```
 
-Rows are sorted attention-first (waiting → busy → idle), then oldest-first within a status, so the
-session that has been stuck longest is always at the top.
+Click the icon for the session list. Rows are sorted attention-first (waiting → busy → idle), then
+oldest-first within a status, so the session that has been stuck longest is always at the top — as
+below, where a permission prompt pulls `api-gateway-f6` to the top of the list.
+
+<img src="docs/demo.gif" width="900"
+  alt="The tray icon changing from a gray ring to blue to red as sessions start working and then block on a permission prompt, while the menu re-sorts the blocked session to the top">
 
 ## Where the data comes from
 
