@@ -160,6 +160,8 @@ pub const DOT_WORKING: Rgba = [0x6A, 0x69, 0x65, 0xFF];
 pub const DOT_DONE: Rgba = [0x4B, 0x4A, 0x47, 0xFF];
 /// Finished, with something you have not looked at yet.
 pub const DOT_UNREAD: Rgba = [0x2A, 0x78, 0xD6, 0xFF];
+/// Ended badly. Claude's palette has no failure colour, so this is the one addition to it.
+pub const DOT_ERROR: Rgba = [0xE5, 0x48, 0x4D, 0xFF];
 
 /// Colour and fill for a status, following the Claude desktop app's convention: amber is waiting
 /// on you, grey filled is working, a hollow ring is finished.
@@ -177,6 +179,7 @@ pub fn status_dot(status: Status) -> (Rgba, bool) {
         Status::Waiting => (DOT_WAITING, true),
         Status::Busy | Status::Shell => (DOT_WORKING, true),
         Status::Unread => (DOT_UNREAD, true),
+        Status::Error => (DOT_ERROR, true),
         Status::Idle | Status::Unknown => (DOT_DONE, false),
     }
 }

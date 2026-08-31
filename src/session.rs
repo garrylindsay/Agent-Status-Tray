@@ -12,6 +12,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::liveness;
 
+/// Which agent tool a session belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    ClaudeCode,
+    Cursor,
+}
+
+impl Provider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Provider::ClaudeCode => "Claude",
+            Provider::Cursor => "Cursor",
+        }
+    }
+}
+
 /// Serialized in the config file as lowercase names, matching the on-disk registry vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -22,6 +39,8 @@ pub enum Status {
     /// Finished, with something you have not looked at yet. Not a registry status: it comes from
     /// the desktop app's record of when you last focused the session.
     Unread,
+    /// Ended badly and wants looking at. Reported by Cursor; Claude Code has no equivalent.
+    Error,
     Idle,
     Unknown,
 }
@@ -43,6 +62,7 @@ impl Status {
             Status::Busy => "BUSY",
             Status::Shell => "SHELL",
             Status::Unread => "UNREAD",
+            Status::Error => "ERROR",
             Status::Idle => "IDLE",
             Status::Unknown => "?",
         }
@@ -55,19 +75,22 @@ impl Status {
             Status::Busy => "Busy",
             Status::Shell => "Running a shell command",
             Status::Unread => "Finished, not looked at",
+            Status::Error => "Failed",
             Status::Idle => "Finished",
             Status::Unknown => "Unknown / not reported",
         }
     }
 
     /// Sort key: attention-needing sessions first.
-    fn rank(self) -> u8 {
+    pub fn rank(self) -> u8 {
         match self {
             Status::Waiting => 0,
-            Status::Busy | Status::Shell => 1,
-            Status::Unread => 2,
-            Status::Idle => 3,
-            Status::Unknown => 4,
+            // A failure is as worth surfacing as a prompt, and more than work in progress.
+            Status::Error => 1,
+            Status::Busy | Status::Shell => 2,
+            Status::Unread => 3,
+            Status::Idle => 4,
+            Status::Unknown => 5,
         }
     }
 }
@@ -90,6 +113,8 @@ struct Raw {
 
 #[derive(Debug, Clone)]
 pub struct Session {
+    pub provider: Provider,
+    /// Process to raise when the row is clicked. Zero when the session has no process of its own.
     pub pid: u32,
     pub name: String,
     /// Working directory, which locates the transcript holding the conversation title.
@@ -241,6 +266,7 @@ impl Registry {
             }
 
             sessions.push(Session {
+                provider: Provider::ClaudeCode,
                 pid,
                 name: display_name(pid, &raw),
                 cwd: raw.cwd.clone(),
@@ -338,6 +364,7 @@ mod tests {
 
     fn session(entrypoint: Option<&str>, desktop_session_id: Option<&str>) -> Session {
         Session {
+            provider: Provider::ClaudeCode,
             pid: 1,
             name: "x".to_string(),
             cwd: String::new(),

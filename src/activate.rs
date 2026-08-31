@@ -160,6 +160,19 @@ fn raise(hwnd: HWND) -> bool {
     }
 }
 
+/// First process with the given image name that owns a real top-level window.
+///
+/// Sessions that have no process of their own — a Cursor cloud agent runs on Cursor's servers —
+/// still want a window to raise, and their application's is the only sensible one.
+pub fn process_with_window(image_name: &str) -> Option<u32> {
+    let want = image_name.to_ascii_lowercase();
+    snapshot()
+        .into_iter()
+        .filter(|e| e.name == want)
+        .find(|e| find_window(e.pid).is_some())
+        .map(|e| e.pid)
+}
+
 /// Hands a `claude://` deep link to the shell, which routes it to the registered handler.
 ///
 /// Best effort by design: while the app's feature flag keeps the handler switched off this does

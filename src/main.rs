@@ -10,6 +10,7 @@
 mod activate;
 mod alert;
 mod config;
+mod cursor;
 mod desktop;
 mod icon;
 mod liveness;
@@ -33,6 +34,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use alert::Alerter;
 use config::Config;
+use cursor::Cursor;
 use desktop::Desktop;
 use notify::{AlertRow, Popup};
 use session::{IconState, Registry, Session, Status};
@@ -163,6 +165,56 @@ impl MenuRow {
     }
 }
 
+/// Everywhere sessions are read from.
+///
+/// Each provider knows only its own tool; the rest of the program sees one merged list and cannot
+/// tell which source a row came from except by its label.
+struct Sources {
+    registry: Registry,
+    titles: Titles,
+    desktop: Desktop,
+    cursor: Cursor,
+}
+
+impl Sources {
+    fn new() -> Sources {
+        Sources {
+            registry: Registry::new(),
+            titles: Titles::new(),
+            desktop: Desktop::new(),
+            cursor: Cursor::new(),
+        }
+    }
+
+    /// Every provider's sessions, in one list, ordered attention-first.
+    fn collect(&mut self, now_ms: u64) -> Vec<Session> {
+        // Claude Code: the registry says which sessions exist, the transcript supplies the title,
+        // and the desktop record supplies the state the registry no longer reports.
+        let mut sessions = self.registry.scan();
+        for session in &mut sessions {
+            if let Some(id) = session.session_id.clone() {
+                session.title = self.titles.get(&session.cwd, &id);
+            }
+        }
+        self.desktop.apply(&mut sessions);
+
+        let live: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
+        self.titles.retain(&live);
+
+        sessions.extend(self.cursor.sessions(now_ms));
+
+        // Re-sorted across providers: a failed Cursor agent outranks an idle Claude session.
+        sessions.sort_by(|a, b| {
+            a.status
+                .rank()
+                .cmp(&b.status.rank())
+                .then(a.since.cmp(&b.since))
+                .then(a.pid.cmp(&b.pid))
+        });
+        sessions
+    }
+}
+
 /// Sessions as the alert draws them. Every alert goes through here — real, test and demo — so a
 /// sample can never drift away from the real thing's appearance.
 fn alert_rows(sessions: &[Session], now_ms: u64) -> Vec<AlertRow> {
@@ -181,6 +233,7 @@ fn alert_rows(sessions: &[Session], now_ms: u64) -> Vec<AlertRow> {
 fn sample_sessions(now_ms: u64) -> Vec<Session> {
     vec![
         Session {
+            provider: session::Provider::ClaudeCode,
             pid: 0,
             name: "api-gateway-f6".to_string(),
             cwd: String::new(),
@@ -193,8 +246,9 @@ fn sample_sessions(now_ms: u64) -> Vec<Session> {
             since: now_ms.saturating_sub(240_000),
         },
         Session {
+            provider: session::Provider::Cursor,
             pid: 0,
-            name: "claude-tray-97".to_string(),
+            name: "scale-fun-der".to_string(),
             cwd: String::new(),
             title: Some("Claude-tray repo setup".to_string()),
             session_id: None,
@@ -231,30 +285,16 @@ fn accent_for(sessions: &[Session]) -> (u8, u8, u8) {
 
 /// Returns the sessions it rendered, so a later menu click can resolve a pid back to one.
 fn tick(
-    registry: &mut Registry,
+    sources: &mut Sources,
     ui: &mut Ui,
     config: &Config,
     alerter: &mut Alerter,
     popup: Option<&Popup>,
-    titles: &mut Titles,
-    desktop: &mut Desktop,
 ) -> Vec<Session> {
     // Cheap, and guarded against re-flushing, so the menu follows a theme switched mid-run.
     theme::sync_menu_theme();
-    let mut sessions = registry.scan();
-
-    // Titles come from the transcripts rather than the registry, and are cached against file size
-    // so an unchanged transcript is never re-read.
-    for session in &mut sessions {
-        if let Some(id) = session.session_id.clone() {
-            session.title = titles.get(&session.cwd, &id);
-        }
-    }
-
-    desktop.apply(&mut sessions);
-    let live: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
-    titles.retain(&live);
     let now = now_ms();
+    let sessions = sources.collect(now);
     let rows: Vec<MenuRow> = sessions.iter().map(|s| MenuRow::new(s, now)).collect();
 
     ui.apply(
@@ -312,15 +352,7 @@ fn demo_alert() {
 
     // Prefer the sessions actually running, so clicking a row really does jump to one.
     let now = now_ms();
-    let mut titles = Titles::new();
-    let mut desktop = Desktop::new();
-    let mut sessions = Registry::new().scan();
-    for session in &mut sessions {
-        if let Some(id) = session.session_id.clone() {
-            session.title = titles.get(&session.cwd, &id);
-        }
-    }
-    desktop.apply(&mut sessions);
+    let mut sessions = Sources::new().collect(now);
     if sessions.is_empty() {
         sessions = sample_sessions(now);
     }
@@ -404,17 +436,9 @@ fn main() {
     // Before the first menu is built: the theme has to be set for a menu to be created dark.
     theme::sync_menu_theme();
 
-    let mut registry = Registry::new();
     let mut alerter = Alerter::new();
-    let mut titles = Titles::new();
-    let mut desktop = Desktop::new();
-    let mut sessions = registry.scan();
-    for session in &mut sessions {
-        if let Some(id) = session.session_id.clone() {
-            session.title = titles.get(&session.cwd, &id);
-        }
-    }
-    desktop.apply(&mut sessions);
+    let mut sources = Sources::new();
+    let sessions = sources.collect(now_ms());
     let state = session::icon_state(&sessions);
 
     // Right-click opens the menu, as every other tray icon does. Left-click is deliberately left
@@ -472,15 +496,7 @@ fn main() {
             && msg.hwnd.is_null()
             && msg.wParam == timer_id
         {
-            known = tick(
-                &mut registry,
-                &mut ui,
-                &config,
-                &mut alerter,
-                popup.as_ref(),
-                &mut titles,
-                &mut desktop,
-            );
+            known = tick(&mut sources, &mut ui, &config, &mut alerter, popup.as_ref());
         }
         unsafe {
             TranslateMessage(&msg);

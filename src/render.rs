@@ -19,6 +19,8 @@ pub fn elapsed(ms: u64) -> String {
             }
         }
         600..=3599 => format!("{}m", secs / 60),
+        // Past a couple of days, hours stop being readable: 8629 minutes means nothing.
+        172_800.. => format!("{}d", secs / 86_400),
         _ => {
             let (h, m) = (secs / 3600, (secs % 3600) / 60);
             if m == 0 {
@@ -45,13 +47,17 @@ fn escape_mnemonics(text: &str) -> String {
 /// claimed about what the session is doing.
 pub fn row_text(session: &Session, now_ms: u64) -> String {
     let age = elapsed(now_ms.saturating_sub(session.since));
+    // Rows from different tools sit in one list, so each says which tool it came from.
     let name = match &session.title {
-        // The registry name is derived from the folder, so it says where a session is but not
-        // what it is about; the conversation's own title is what tells them apart.
-        Some(title) if title != &session.name => {
-            format!("{} \u{00b7} {}", session.name, title)
-        }
-        _ => session.name.clone(),
+        // The name says where a session is but not what it is about; the conversation's own title
+        // is what tells two sessions in the same place apart.
+        Some(title) if title != &session.name => format!(
+            "{}/{} \u{00b7} {}",
+            session.provider.label(),
+            session.name,
+            title
+        ),
+        _ => format!("{}/{}", session.provider.label(), session.name),
     };
 
     if session.status == Status::Unknown {
@@ -83,52 +89,61 @@ pub fn alert_row(session: &Session, now_ms: u64) -> String {
 pub fn alert_title(sessions: &[Session]) -> String {
     let n = sessions.len();
     if n == 0 {
-        return "No Claude sessions".to_string();
+        return "No agent sessions".to_string();
+    }
+
+    if sessions.iter().any(|s| s.status == Status::Error) {
+        let failed = sessions.iter().filter(|s| s.status == Status::Error).count();
+        return if failed == 1 {
+            "1 agent failed".to_string()
+        } else {
+            format!("{failed} agents failed")
+        };
     }
 
     if sessions.iter().all(|s| s.status == Status::Waiting) {
         return if n == 1 {
-            "1 Claude session is waiting on you".to_string()
+            "1 session is waiting on you".to_string()
         } else {
-            format!("{n} Claude sessions are waiting on you")
+            format!("{n} sessions are waiting on you")
         };
     }
 
     if sessions.iter().all(|s| s.status == Status::Unread) {
         return if n == 1 {
-            "1 Claude session finished".to_string()
+            "1 session finished".to_string()
         } else {
-            format!("{n} Claude sessions finished")
+            format!("{n} sessions finished")
         };
     }
 
     if sessions.iter().all(|s| s.status == Status::Unknown) {
         return if n == 1 {
-            "1 Claude session open".to_string()
+            "1 session open".to_string()
         } else {
-            format!("{n} Claude sessions open")
+            format!("{n} sessions open")
         };
     }
 
     if n == 1 {
-        "1 Claude session needs attention".to_string()
+        "1 session needs attention".to_string()
     } else {
-        format!("{n} Claude sessions need attention")
+        format!("{n} sessions need attention")
     }
 }
 
 pub fn header(sessions: &[Session]) -> String {
     match sessions.len() {
-        0 => "No Claude sessions".to_string(),
-        1 => "1 Claude session".to_string(),
-        n => format!("{n} Claude sessions"),
+        0 => "No agent sessions".to_string(),
+        1 => "1 agent session".to_string(),
+        n => format!("{n} agent sessions"),
     }
 }
 
 /// Hover text: `4 sessions · 1 waiting · 1 busy`
 pub fn tooltip(sessions: &[Session]) -> String {
     if sessions.is_empty() {
-        return "No Claude sessions".to_string();
+        return "No agent sessions".to_string();
     }
 
     let waiting = sessions
@@ -139,6 +154,8 @@ pub fn tooltip(sessions: &[Session]) -> String {
         .iter()
         .filter(|s| matches!(s.status, Status::Busy | Status::Shell))
         .count();
+    let failed = sessions.iter().filter(|s| s.status == Status::Error).count();
+    let unread = sessions.iter().filter(|s| s.status == Status::Unread).count();
     let idle = sessions.iter().filter(|s| s.status == Status::Idle).count();
     let unknown = sessions
         .iter()
@@ -153,8 +170,14 @@ pub fn tooltip(sessions: &[Session]) -> String {
     if waiting > 0 {
         parts.push(format!("{waiting} waiting"));
     }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
     if busy > 0 {
         parts.push(format!("{busy} busy"));
+    }
+    if unread > 0 {
+        parts.push(format!("{unread} unread"));
     }
     if idle > 0 {
         parts.push(format!("{idle} idle"));
@@ -189,6 +212,7 @@ mod tests {
 
     fn session(name: &str, status: Status) -> Session {
         Session {
+            provider: crate::session::Provider::ClaudeCode,
             pid: 1,
             name: name.to_string(),
             cwd: String::new(),
@@ -231,14 +255,14 @@ mod tests {
             session("a", Status::Unknown),
             session("b", Status::Unknown),
         ];
-        assert_eq!(alert_title(&sessions), "2 Claude sessions open");
+        assert_eq!(alert_title(&sessions), "2 sessions open");
         assert!(tooltip(&sessions).contains("state not reported"));
     }
 
     #[test]
     fn waiting_sessions_still_say_so() {
         let sessions = vec![session("a", Status::Waiting)];
-        assert_eq!(alert_title(&sessions), "1 Claude session is waiting on you");
+        assert_eq!(alert_title(&sessions), "1 session is waiting on you");
     }
 
     /// A mix is only as strong as its weakest claim, but something really is waiting.
@@ -248,7 +272,7 @@ mod tests {
             session("a", Status::Waiting),
             session("b", Status::Unknown),
         ];
-        assert_eq!(alert_title(&sessions), "2 Claude sessions need attention");
+        assert_eq!(alert_title(&sessions), "2 sessions need attention");
         assert!(tooltip(&sessions).contains("1 not reported"));
     }
 }

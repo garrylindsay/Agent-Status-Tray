@@ -1,18 +1,48 @@
-# claude-tray
+# Agent-Status-Tray
 
 <img src="docs/hero.png" width="900"
-  alt="claude-tray: a red tray icon badged 2, beside the session menu listing one waiting, one busy and two idle Claude Code sessions">
+  alt="A red tray icon badged 2, beside the session menu listing one waiting, one busy and two idle agent sessions">
 
-Tray-resident status for every running Claude Code session on this machine. Tells you at a glance
-— without focusing the terminal — how many sessions are running and whether any of them is blocked
-waiting on you.
+Tray-resident status for every agent session on this machine — **Claude Code** sessions and
+**Cursor** cloud agents in one list. Tells you at a glance, without focusing anything, how many are
+running and whether any of them is blocked waiting on you.
 
-Display only. It never writes to Claude Code's files and never sends it anything.
+Display only. It reads each tool's own files, never writes to them, and never sends them anything.
+Cursor's store is opened read-only.
+
+> Forked from [joshvito/claude-tray](https://github.com/joshvito/claude-tray), which is the Claude
+> Code tray this is built on. This fork adds Cursor as a second source, desktop alerts, a settings
+> panel, click-to-jump and system theming. Improvements to the Claude Code side go back upstream.
+
+## Where sessions come from
+
+| Tool | Source | What it can say |
+| --- | --- | --- |
+| Claude Code | the session registry, the transcript, and the desktop app's own record | waiting, busy, finished-unread, finished |
+| Cursor | `state.vscdb`, key `cloudAgentRepository.agents.*` | running, finished-unread, finished, failed |
+
+Cursor's **cloud agents** carry a real status and an unread flag, so every row shows genuine state.
+Its local chats are deliberately not listed: they live in `conversation-search.db` with a title and
+a timestamp but no live state, and there are hundreds of them — they would bury the agents that are
+actually doing something.
+
+The Cursor status numbers are its own `aiserver.v1.BackgroundComposerStatus`, read out of the app's
+bundle rather than guessed:
+
+```
+1 RUNNING    2 FINISHED    3 ERROR    4 CREATING    5 EXPIRED
+```
 
 ```
 tray icon:  ( 2 )   red disc   -> 2 sessions waiting on you
             ( 1 )   blue disc  -> 1 session working, none blocked
             ( 4 )   gray ring  -> 4 sessions, all idle
+
+row dots:   amber  filled  -> waiting on you
+            red    filled  -> failed
+            grey   filled  -> working
+            blue   filled  -> finished, not looked at
+            grey   hollow  -> finished
 ```
 
 Right-click the icon for the session list, and a row in it to jump to that session. Rows are
@@ -60,7 +90,7 @@ things meant reopening the menu three times.
 | Setting | Default | Choices |
 | --- | --- | --- |
 | Show desktop alerts | on | on / off |
-| Alert me about | Waiting on you | any of waiting, busy, shell, finished-unread, finished, unknown |
+| Alert me about | Waiting on you | any of waiting, failed, busy, shell, finished-unread, finished, unknown |
 | Repeat alert | Every minute | only once, 30s, 1m, 2m, 5m, 10m, 15m, 30m |
 | Alert sound | Notification | none, system beep, notification, asterisk, exclamation, critical stop, question |
 | Alert stays for | 8 seconds | until clicked, 5s, 8s, 15s, 30s |
@@ -102,8 +132,8 @@ it while the app runs is picked up without a restart.
 To see either without going through the tray:
 
 ```powershell
-.\target\release\claude-tray.exe --demo-alert
-.\target\release\claude-tray.exe --demo-settings
+.\target\release\agent-status-tray.exe --demo-alert
+.\target\release\agent-status-tray.exe --demo-settings
 ```
 
 ## What the desktop app knows
@@ -162,8 +192,12 @@ a stale row beats a missing one.
 
 ```powershell
 cargo build --release
-.\target\release\claude-tray.exe
+.\target\release\agent-status-tray.exe
 ```
+
+The only non-obvious dependency is `rusqlite`, bundled, because Cursor's stores are SQLite. It
+builds from source, so a C compiler is needed — the MSVC toolchain Rust already requires on Windows
+is enough.
 
 No console window appears; look for the icon in the tray. Exit from the tray menu.
 
