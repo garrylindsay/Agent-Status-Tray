@@ -86,6 +86,8 @@ pub struct AlertRow {
     pub text: String,
     /// Session to raise when the row is clicked. Zero for rows that are not a real session.
     pub pid: u32,
+    /// `claude://` link that opens this exact session, where the host supports one.
+    pub deep_link: Option<String>,
 }
 
 /// What the window paints on its next `WM_PAINT`.
@@ -299,12 +301,13 @@ unsafe extern "system" fn wnd_proc(
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
                 let target = CONTENT.with(|c| {
                     let content = c.borrow();
-                    row_at(y, content.rows.len()).map(|i| content.rows[i].pid)
+                    row_at(y, content.rows.len())
+                        .map(|i| (content.rows[i].pid, content.rows[i].deep_link.clone()))
                 });
                 KillTimer(hwnd, DISMISS_TIMER);
                 ShowWindow(hwnd, SW_HIDE);
-                if let Some(pid) = target {
-                    crate::activate::focus_session(pid);
+                if let Some((pid, deep_link)) = target {
+                    crate::activate::focus_session(pid, deep_link.as_deref());
                 }
                 0
             }

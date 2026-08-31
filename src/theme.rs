@@ -115,6 +115,70 @@ impl Palette {
     }
 }
 
+/// `SetPreferredAppMode` values.
+const APPMODE_FORCE_DARK: i32 = 2;
+const APPMODE_FORCE_LIGHT: i32 = 3;
+
+/// uxtheme exports these by ordinal only — they have never been given names or a header. Chromium
+/// and Electron reach for the same two, which is the only reason a Win32 context menu can be dark
+/// at all: `TrackPopupMenu` otherwise always draws the light scheme.
+const ORDINAL_SET_PREFERRED_APP_MODE: usize = 135;
+const ORDINAL_FLUSH_MENU_THEMES: usize = 136;
+
+type SetPreferredAppMode = unsafe extern "system" fn(i32) -> i32;
+type FlushMenuThemes = unsafe extern "system" fn();
+
+thread_local! {
+    /// Last mode handed to uxtheme, so a no-op tick does not re-flush the theme cache.
+    static APPLIED_DARK: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Points the tray menu at the dark or light scheme to match the system.
+///
+/// Undocumented and ordinal-addressed, so every step is checked and a failure just leaves the
+/// menu light — the rest of the program does not care.
+pub fn sync_menu_theme() {
+    let dark = dark_mode();
+    if APPLIED_DARK.with(|a| a.get()) == Some(dark) {
+        return;
+    }
+
+    unsafe {
+        let module = windows_sys::Win32::System::LibraryLoader::LoadLibraryW(
+            wide("uxtheme.dll").as_ptr(),
+        );
+        if module.is_null() {
+            return;
+        }
+
+        let set = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
+            module,
+            ORDINAL_SET_PREFERRED_APP_MODE as *const u8,
+        );
+        let flush = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
+            module,
+            ORDINAL_FLUSH_MENU_THEMES as *const u8,
+        );
+        let (Some(set), Some(flush)) = (set, flush) else {
+            return;
+        };
+
+        let set: SetPreferredAppMode = std::mem::transmute(set);
+        let flush: FlushMenuThemes = std::mem::transmute(flush);
+
+        // Force rather than "allow": allow-dark only takes effect for windows that have opted in
+        // individually, which a menu owned by the shell never does.
+        set(if dark {
+            APPMODE_FORCE_DARK
+        } else {
+            APPMODE_FORCE_LIGHT
+        });
+        flush();
+    }
+
+    APPLIED_DARK.with(|a| a.set(Some(dark)));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +202,69 @@ mod tests {
     #[test]
     fn a_missing_theme_value_reads_as_light() {
         assert!(hkcu_dword(r"Software\claude-tray\nope", "Missing").is_none());
+    }
+
+    /// The dark-menu entry points are undocumented, so confirm they are actually there rather
+    /// than assuming: a silent miss would leave the menu light with no other symptom.
+    #[test]
+    fn uxtheme_dark_menu_ordinals_resolve() {
+        unsafe {
+            let module = windows_sys::Win32::System::LibraryLoader::LoadLibraryW(
+                wide("uxtheme.dll").as_ptr(),
+            );
+            assert!(!module.is_null(), "uxtheme.dll did not load");
+            assert!(
+                windows_sys::Win32::System::LibraryLoader::GetProcAddress(
+                    module,
+                    ORDINAL_SET_PREFERRED_APP_MODE as *const u8
+                )
+                .is_some(),
+                "SetPreferredAppMode (ordinal 135) missing"
+            );
+            assert!(
+                windows_sys::Win32::System::LibraryLoader::GetProcAddress(
+                    module,
+                    ORDINAL_FLUSH_MENU_THEMES as *const u8
+                )
+                .is_some(),
+                "FlushMenuThemes (ordinal 136) missing"
+            );
+        }
+    }
+
+    /// Evidence that `SetPreferredAppMode` actually took, rather than merely being callable:
+    /// uxtheme's `IsDarkModeAllowedForApp` (ordinal 139) reports the mode back.
+    #[test]
+    fn setting_the_mode_is_visible_to_uxtheme() {
+        if !dark_mode() {
+            // Nothing to assert on a light machine; the forced mode there is light.
+            return;
+        }
+        sync_menu_theme();
+        unsafe {
+            let module = windows_sys::Win32::System::LibraryLoader::LoadLibraryW(
+                wide("uxtheme.dll").as_ptr(),
+            );
+            let Some(is_allowed) =
+                windows_sys::Win32::System::LibraryLoader::GetProcAddress(module, 139 as *const u8)
+            else {
+                return; // Ordinal 139 is not load-bearing; skip rather than fail the suite.
+            };
+            let is_allowed: unsafe extern "system" fn() -> i32 = std::mem::transmute(is_allowed);
+            assert!(
+                is_allowed() != 0,
+                "uxtheme still reports dark mode as disallowed after SetPreferredAppMode"
+            );
+        }
+    }
+
+    /// Applying twice must not re-flush; the guard is what keeps this off the poll tick.
+    #[test]
+    fn syncing_twice_is_a_no_op() {
+        sync_menu_theme();
+        let first = APPLIED_DARK.with(|a| a.get());
+        sync_menu_theme();
+        assert_eq!(first, APPLIED_DARK.with(|a| a.get()));
+        assert_eq!(first, Some(dark_mode()));
     }
 }

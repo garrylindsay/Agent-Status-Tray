@@ -145,6 +145,8 @@ mod tests {
         let session = Session {
             pid: 1,
             name: "r&d-tool".to_string(),
+            session_id: None,
+            entrypoint: None,
             status: Status::Idle,
             waiting_for: None,
             since: 0,

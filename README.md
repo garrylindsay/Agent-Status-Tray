@@ -76,7 +76,13 @@ toast needs a registered AppUserModelID and a Start-menu shortcut, and Focus Ass
 per-app notification switches can silently suppress it — the wrong behaviour for something whose
 whole job is to be seen.
 
-Both windows paint in the system colours: `GetSysColor` for the light scheme, the shell's dark
+The tray menu follows the system theme too. A Win32 menu is drawn by the shell and always uses the
+light scheme unless the process opts in through two uxtheme entry points that exist only as
+ordinals — `SetPreferredAppMode` (135) and `FlushMenuThemes` (136), the same pair Chromium and
+Electron use. Both are resolved defensively; if either is missing the menu just stays light. The
+mode is set before the first menu is built and re-applied when the system theme changes.
+
+Both owner-drawn windows paint in the system colours: `GetSysColor` for the light scheme, the shell's dark
 surface colours when apps are set to dark (`GetSysColor` predates dark mode and keeps returning
 the light scheme, so there is nothing to read for that), and the Windows accent colour for the
 panel's stripe, ticks and values. The theme is re-read each time a window is shown, so switching
@@ -149,12 +155,15 @@ $s.Save()
   window), every one of those rows raises that same window and lands on whichever tab was last
   open. Selecting the tab would mean driving Claude Code over the private pipe named in
   `messagingSocketPath`, which is undocumented and which this program deliberately does not touch.
-- The Claude desktop app does register a `claude://` handler with a deep link that would do exactly
-  this — `claude://code/continue?session=local_<sessionId>`, where `<sessionId>` is the one in the
-  registry file and `local_` is the prefix the app's own session store uses. It is accepted (a
-  malformed id logs `code entry link invalid ?session` instead), but the handler is currently
-  behind a server-side feature flag and answers `claudeURLHandler: code entry deep link gated off`,
-  so nothing happens. Worth revisiting if that flag is ever turned on.
+  Clicking a desktop-hosted session *does* also fire the deep link that would select the exact
+  session — `claude://code/continue?session=local_<sessionId>&source=desktop_action`, where
+  `<sessionId>` is the one in the registry file and `local_` is the prefix the app's own session
+  store uses. The app accepts the URL (a malformed id logs `code entry link invalid ?session`
+  instead) but currently answers `claudeURLHandler: code entry deep link gated off`: the handler
+  sits behind a server-side GrowthBook flag. Until that flag is enabled the link costs one no-op
+  launch and the window raise is what you see; once it is enabled, clicks land on the right session
+  with no change here. It is only sent for sessions whose `entrypoint` is `claude-desktop`, since
+  firing `claude://` for a terminal-hosted session would raise the wrong application.
 - The menu is a snapshot from the moment it opened — Windows can't repaint an open menu, so elapsed
   times freeze until you close and reopen it.
 - Menu rows use the system menu font, which is proportional, so columns are separated with `—` and

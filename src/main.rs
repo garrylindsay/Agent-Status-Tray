@@ -146,13 +146,16 @@ fn accent_for(sessions: &[Session]) -> (u8, u8, u8) {
     }
 }
 
+/// Returns the sessions it rendered, so a later menu click can resolve a pid back to one.
 fn tick(
     registry: &mut Registry,
     ui: &mut Ui,
     config: &Config,
     alerter: &mut Alerter,
     popup: Option<&Popup>,
-) {
+) -> Vec<Session> {
+    // Cheap, and guarded against re-flushing, so the menu follows a theme switched mid-run.
+    theme::sync_menu_theme();
     let sessions = registry.scan();
     let now = now_ms();
     let rows: Vec<(String, u32)> = sessions
@@ -182,6 +185,7 @@ fn tick(
             .map(|s| AlertRow {
                 text: render::alert_row(s, now),
                 pid: s.pid,
+                deep_link: s.deep_link(),
             })
             .collect();
         popup.show(
@@ -192,6 +196,8 @@ fn tick(
             config.sound,
         );
     }
+
+    sessions
 }
 
 /// A sample alert, so the look and sound can be checked without waiting for a session to block.
@@ -205,10 +211,12 @@ fn show_test_alert(config: &Config, popup: Option<&Popup>) {
                     text: "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt"
                         .to_string(),
                     pid: 0,
+                    deep_link: None,
                 },
                 AlertRow {
                     text: "\u{25d0} claude-tray-97 \u{2014} BUSY 12s".to_string(),
                     pid: 0,
+                    deep_link: None,
                 },
             ],
             (0xE5, 0x48, 0x2F),
@@ -234,11 +242,13 @@ fn demo_alert() {
                 text: "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt"
                     .to_string(),
                 pid: 0,
+                deep_link: None,
             },
             AlertRow {
                 text: "\u{25cf} claude-tray-97 \u{2014} WAITING 38s \u{b7} input needed"
                     .to_string(),
                 pid: 0,
+                deep_link: None,
             },
         ]
     } else {
@@ -247,6 +257,7 @@ fn demo_alert() {
             .map(|s| AlertRow {
                 text: render::alert_row(s, now),
                 pid: s.pid,
+                deep_link: s.deep_link(),
             })
             .collect()
     };
@@ -326,6 +337,9 @@ fn main() {
         config.save();
     }
 
+    // Before the first menu is built: the theme has to be set for a menu to be created dark.
+    theme::sync_menu_theme();
+
     let mut registry = Registry::new();
     let mut alerter = Alerter::new();
     let sessions = registry.scan();
@@ -352,6 +366,8 @@ fn main() {
     let settings = SettingsWindow::new();
 
     let mut ui = Ui::new(tray);
+    // Most recent scan, so a menu click can resolve its pid back to a session.
+    let mut known = sessions.clone();
     let now = now_ms();
     ui.apply(
         state,
@@ -387,7 +403,7 @@ fn main() {
             && msg.hwnd.is_null()
             && msg.wParam == timer_id
         {
-            tick(&mut registry, &mut ui, &config, &mut alerter, popup.as_ref());
+            known = tick(&mut registry, &mut ui, &config, &mut alerter, popup.as_ref());
         }
         unsafe {
             TranslateMessage(&msg);
@@ -410,7 +426,11 @@ fn main() {
             } else if let Some(pid) = id.strip_prefix("session.")
                 && let Ok(pid) = pid.parse::<u32>()
             {
-                activate::focus_session(pid);
+                let deep_link = known
+                    .iter()
+                    .find(|s| s.pid == pid)
+                    .and_then(|s| s.deep_link());
+                activate::focus_session(pid, deep_link.as_deref());
             }
         }
 

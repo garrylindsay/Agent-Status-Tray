@@ -16,6 +16,7 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowTextLengthW,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE, SetForegroundWindow,
@@ -159,9 +160,35 @@ fn raise(hwnd: HWND) -> bool {
     }
 }
 
+/// Hands a `claude://` deep link to the shell, which routes it to the registered handler.
+///
+/// Best effort by design: while the app's feature flag keeps the handler switched off this does
+/// nothing beyond bringing the app forward, and the window raise below is what actually works.
+fn open_deep_link(uri: &str) {
+    let uri: Vec<u16> = uri.encode_utf16().chain(std::iter::once(0)).collect();
+    let verb: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            verb.as_ptr(),
+            uri.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        );
+    }
+}
+
 /// Brings the window hosting `pid` to the front. False when no window could be attributed to it,
 /// which is not worth reporting anywhere: the click simply does nothing, as it did before.
-pub fn focus_session(pid: u32) -> bool {
+///
+/// `deep_link` is tried first where the host can act on one, so that the moment the desktop app's
+/// feature flag is enabled a click lands on the exact session rather than merely its window. The
+/// raise still runs either way, which is what makes the click work today.
+pub fn focus_session(pid: u32, deep_link: Option<&str>) -> bool {
+    if let Some(uri) = deep_link {
+        open_deep_link(uri);
+    }
     if pid == 0 {
         return false;
     }
@@ -199,13 +226,13 @@ mod tests {
 
     #[test]
     fn pid_zero_is_never_chased() {
-        assert!(!focus_session(0));
+        assert!(!focus_session(0, None));
     }
 
     /// A pid that cannot exist must fail rather than walk into something arbitrary.
     #[test]
     fn an_impossible_pid_finds_nothing() {
-        assert!(!focus_session(u32::MAX - 1));
+        assert!(!focus_session(u32::MAX - 1, None));
     }
 
     #[test]
