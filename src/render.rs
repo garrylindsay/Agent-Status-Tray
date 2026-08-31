@@ -36,14 +36,23 @@ fn escape_mnemonics(text: &str) -> String {
 }
 
 /// One row: `● api-gateway-f6 — WAITING 4m · permission prompt`
+///
+/// A session whose status was never reported gets `◌ name — up 4h36m` instead. Printing a `?`
+/// where a status belongs reads as a state the session is in, and the duration beside it is the
+/// session's age rather than the age of any status, so it is labelled as uptime and nothing is
+/// claimed about what the session is doing.
 pub fn row_text(session: &Session, now_ms: u64) -> String {
-    let age = now_ms.saturating_sub(session.since);
+    let age = elapsed(now_ms.saturating_sub(session.since));
+    if session.status == Status::Unknown {
+        return format!("{} {} \u{2014} up {}", session.status.glyph(), session.name, age);
+    }
+
     let mut text = format!(
         "{} {} \u{2014} {} {}",
         session.status.glyph(),
         session.name,
         session.status.label(),
-        elapsed(age)
+        age
     );
     if let Some(reason) = &session.waiting_for {
         text.push_str(" \u{00b7} ");
@@ -62,17 +71,33 @@ pub fn alert_row(session: &Session, now_ms: u64) -> String {
     row_text(session, now_ms)
 }
 
-/// Popup heading: names what is actually wanted from you when that is unambiguous.
+/// Popup heading: names what is actually wanted from you, and only when that is actually known.
+///
+/// Sessions whose status was never reported must not be described as needing attention — nothing
+/// about them says so, and an alert that overstates what it knows is worse than a vague one.
 pub fn alert_title(sessions: &[Session]) -> String {
     let n = sessions.len();
-    let all_waiting = sessions.iter().all(|s| s.status == Status::Waiting);
-    if all_waiting {
-        if n == 1 {
+    if n == 0 {
+        return "No Claude sessions".to_string();
+    }
+
+    if sessions.iter().all(|s| s.status == Status::Waiting) {
+        return if n == 1 {
             "1 Claude session is waiting on you".to_string()
         } else {
             format!("{n} Claude sessions are waiting on you")
-        }
-    } else if n == 1 {
+        };
+    }
+
+    if sessions.iter().all(|s| s.status == Status::Unknown) {
+        return if n == 1 {
+            "1 Claude session open".to_string()
+        } else {
+            format!("{n} Claude sessions open")
+        };
+    }
+
+    if n == 1 {
         "1 Claude session needs attention".to_string()
     } else {
         format!("{n} Claude sessions need attention")
@@ -102,6 +127,10 @@ pub fn tooltip(sessions: &[Session]) -> String {
         .filter(|s| matches!(s.status, Status::Busy | Status::Shell))
         .count();
     let idle = sessions.iter().filter(|s| s.status == Status::Idle).count();
+    let unknown = sessions
+        .iter()
+        .filter(|s| s.status == Status::Unknown)
+        .count();
 
     let mut parts = vec![format!(
         "{} session{}",
@@ -116,6 +145,11 @@ pub fn tooltip(sessions: &[Session]) -> String {
     }
     if idle > 0 {
         parts.push(format!("{idle} idle"));
+    }
+    if unknown == sessions.len() {
+        parts.push("state not reported".to_string());
+    } else if unknown > 0 {
+        parts.push(format!("{unknown} not reported"));
     }
 
     let mut text = parts.join(" \u{00b7} ");
@@ -140,17 +174,65 @@ mod tests {
         assert_eq!(elapsed(7_200_000), "2h");
     }
 
-    #[test]
-    fn ampersands_are_escaped_for_menus() {
-        let session = Session {
+    fn session(name: &str, status: Status) -> Session {
+        Session {
             pid: 1,
-            name: "r&d-tool".to_string(),
+            name: name.to_string(),
             session_id: None,
             entrypoint: None,
-            status: Status::Idle,
+            status,
             waiting_for: None,
             since: 0,
-        };
-        assert!(row(&session, 0).contains("r&&d-tool"));
+        }
+    }
+
+    #[test]
+    fn ampersands_are_escaped_for_menus() {
+        assert!(row(&session("r&d-tool", Status::Idle), 0).contains("r&&d-tool"));
+    }
+
+    /// A `?` where a status belongs reads as a state the session is in, and the duration beside
+    /// it is the session's age, not a status age.
+    #[test]
+    fn an_unreported_status_is_shown_as_uptime() {
+        let row = row_text(&session("tcc-35", Status::Unknown), 16_360_000);
+        assert!(row.contains("up 4h32m"), "got {row}");
+        assert!(!row.contains('?'), "still claims a status: {row}");
+    }
+
+    #[test]
+    fn a_known_status_still_reads_as_before() {
+        let mut s = session("api-gateway-f6", Status::Waiting);
+        s.waiting_for = Some("permission prompt".to_string());
+        let row = row_text(&s, 240_000);
+        assert!(row.contains("WAITING 4m \u{b7} permission prompt"), "got {row}");
+    }
+
+    /// Nothing about an unreported session says it needs anything.
+    #[test]
+    fn unreported_sessions_are_not_called_attention_worthy() {
+        let sessions = vec![
+            session("a", Status::Unknown),
+            session("b", Status::Unknown),
+        ];
+        assert_eq!(alert_title(&sessions), "2 Claude sessions open");
+        assert!(tooltip(&sessions).contains("state not reported"));
+    }
+
+    #[test]
+    fn waiting_sessions_still_say_so() {
+        let sessions = vec![session("a", Status::Waiting)];
+        assert_eq!(alert_title(&sessions), "1 Claude session is waiting on you");
+    }
+
+    /// A mix is only as strong as its weakest claim, but something really is waiting.
+    #[test]
+    fn a_mixed_set_falls_back_to_attention() {
+        let sessions = vec![
+            session("a", Status::Waiting),
+            session("b", Status::Unknown),
+        ];
+        assert_eq!(alert_title(&sessions), "2 Claude sessions need attention");
+        assert!(tooltip(&sessions).contains("1 not reported"));
     }
 }
