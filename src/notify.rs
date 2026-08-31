@@ -19,10 +19,10 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW,
-    RegisterClassW, SPI_GETWORKAREA, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer, SetWindowPos,
-    ShowWindow, SystemParametersInfoW, WM_LBUTTONDOWN, WM_PAINT, WM_TIMER, WNDCLASSW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, HWND_TOPMOST, IDC_ARROW, IDC_HAND, KillTimer, LoadCursorW,
+    RegisterClassW, SPI_GETWORKAREA, SW_HIDE, SW_SHOWNOACTIVATE, SetCursor, SetTimer, SetWindowPos,
+    ShowWindow, SystemParametersInfoW, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR,
+    WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::config::Sound;
@@ -79,13 +79,37 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// One clickable line of the alert.
+#[derive(Clone)]
+pub struct AlertRow {
+    pub text: String,
+    /// Session to raise when the row is clicked. Zero for rows that are not a real session.
+    pub pid: u32,
+}
+
 /// What the window paints on its next `WM_PAINT`.
 #[derive(Default, Clone)]
 struct Content {
     title: String,
-    rows: Vec<String>,
+    rows: Vec<AlertRow>,
     overflow: usize,
     accent: (u8, u8, u8),
+    /// Row under the pointer, for the hover highlight.
+    hover: Option<usize>,
+    /// Kept so hovering can restart the dismiss timer with the configured duration.
+    duration_secs: u64,
+}
+
+/// Y of the first session row, which is where hit-testing starts.
+const ROWS_TOP: i32 = PAD + TITLE_H + GAP;
+
+/// Row under a client-area point, if the point is on one at all.
+fn row_at(y: i32, count: usize) -> Option<usize> {
+    if y < ROWS_TOP {
+        return None;
+    }
+    let index = ((y - ROWS_TOP) / ROW_H) as usize;
+    (index < count).then_some(index)
 }
 
 thread_local! {
@@ -146,12 +170,12 @@ impl Popup {
     pub fn show(
         &self,
         title: &str,
-        rows: &[String],
+        rows: &[AlertRow],
         accent: (u8, u8, u8),
         duration_secs: u64,
         sound: Sound,
     ) {
-        let shown: Vec<String> = rows.iter().take(MAX_ROWS).cloned().collect();
+        let shown: Vec<AlertRow> = rows.iter().take(MAX_ROWS).cloned().collect();
         let overflow = rows.len().saturating_sub(shown.len());
 
         CONTENT.with(|c| {
@@ -160,6 +184,8 @@ impl Popup {
                 rows: shown.clone(),
                 overflow,
                 accent,
+                hover: None,
+                duration_secs,
             };
         });
 
@@ -263,11 +289,54 @@ unsafe extern "system" fn wnd_proc(
                 paint(hwnd);
                 0
             }
-            // Click anywhere to dismiss, like an Outlook alert.
+            // A click on a session row raises that session's window; anywhere else just dismisses,
+            // as an Outlook alert does.
             WM_LBUTTONDOWN => {
+                let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+                let target = CONTENT.with(|c| {
+                    let content = c.borrow();
+                    row_at(y, content.rows.len()).map(|i| content.rows[i].pid)
+                });
                 KillTimer(hwnd, DISMISS_TIMER);
                 ShowWindow(hwnd, SW_HIDE);
+                if let Some(pid) = target {
+                    crate::activate::focus_session(pid);
+                }
                 0
+            }
+
+            // Hovering marks the row and holds the alert open, so it cannot expire from under the
+            // pointer on the way to a click.
+            WM_MOUSEMOVE => {
+                let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+                let (changed, hovering) = CONTENT.with(|c| {
+                    let mut content = c.borrow_mut();
+                    let hover = row_at(y, content.rows.len());
+                    let changed = content.hover != hover;
+                    content.hover = hover;
+                    (changed, hover.is_some())
+                });
+                if changed {
+                    InvalidateRect(hwnd, ptr::null(), 0);
+                }
+                // Restart rather than cancel, so an alert the pointer merely crosses still goes
+                // away on its own.
+                let duration = CONTENT.with(|c| c.borrow().duration_secs);
+                if hovering && duration > 0 {
+                    SetTimer(hwnd, DISMISS_TIMER, (duration * 1000) as u32, None);
+                }
+                0
+            }
+
+            // Rows are clickable, so say so with the cursor.
+            WM_SETCURSOR => {
+                let hovering = CONTENT.with(|c| c.borrow().hover.is_some());
+                if hovering {
+                    SetCursor(LoadCursorW(ptr::null_mut(), IDC_HAND));
+                    1
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
             }
             WM_TIMER if wparam == DISMISS_TIMER => {
                 KillTimer(hwnd, DISMISS_TIMER);
@@ -334,16 +403,29 @@ unsafe fn paint(hwnd: HWND) {
         );
 
         SelectObject(hdc, body_font as _);
-        SetTextColor(hdc, rgb(0xE4, 0xE4, 0xEA));
-        let mut y = PAD + TITLE_H + GAP;
-        for row in &content.rows {
+        let mut y = ROWS_TOP;
+        for (index, row) in content.rows.iter().enumerate() {
+            // Only rows that lead somewhere are worth highlighting as clickable.
+            if content.hover == Some(index) && row.pid != 0 {
+                let band = RECT {
+                    left: ACCENT_W,
+                    top: y,
+                    right: WIDTH,
+                    bottom: y + ROW_H,
+                };
+                let brush = CreateSolidBrush(rgb(0x33, 0x33, 0x3C));
+                FillRect(hdc, &band, brush);
+                DeleteObject(brush as _);
+            }
+
+            SetTextColor(hdc, rgb(0xE4, 0xE4, 0xEA));
             let mut r = RECT {
                 left: ACCENT_W + PAD,
                 top: y,
                 right: WIDTH - PAD,
                 bottom: y + ROW_H,
             };
-            let mut t = wide(row);
+            let mut t = wide(&row.text);
             DrawTextW(
                 hdc,
                 t.as_mut_ptr(),

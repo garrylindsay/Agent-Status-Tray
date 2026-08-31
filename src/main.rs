@@ -7,6 +7,7 @@
 
 #![windows_subsystem = "windows"]
 
+mod activate;
 mod alert;
 mod config;
 mod icon;
@@ -29,7 +30,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use alert::Alerter;
 use config::Config;
-use notify::Popup;
+use notify::{AlertRow, Popup};
 use session::{IconState, Registry, Session, Status};
 use settings::SettingsWindow;
 
@@ -74,7 +75,13 @@ impl Ui {
         }
     }
 
-    fn apply(&mut self, state: IconState, header: String, rows: Vec<String>, tooltip: String) {
+    fn apply(
+        &mut self,
+        state: IconState,
+        header: String,
+        rows: Vec<(String, u32)>,
+        tooltip: String,
+    ) {
         if self.icon_state != Some(state) {
             if let Some(icon) = make_icon(state) {
                 let _ = self.tray.set_icon(Some(icon));
@@ -99,17 +106,18 @@ impl Ui {
     }
 }
 
-/// Session rows are plain items: clicking one just dismisses the menu. Only Settings and Exit act.
+/// Clicking a session row raises the window hosting that session, as clicking an alert row does.
 ///
 /// Settings deliberately open a window rather than living in submenus here: a Win32 menu closes on
 /// every click, so changing several settings meant reopening the menu once per change.
-fn build_menu(header: &str, rows: &[String]) -> Option<Menu> {
+fn build_menu(header: &str, rows: &[(String, u32)]) -> Option<Menu> {
     let menu = Menu::new();
 
     menu.append(&MenuItem::new(header, false, None)).ok()?;
     menu.append(&PredefinedMenuItem::separator()).ok()?;
-    for row in rows {
-        menu.append(&MenuItem::new(row, true, None)).ok()?;
+    for (text, pid) in rows {
+        menu.append(&MenuItem::with_id(format!("session.{pid}"), text, true, None))
+            .ok()?;
     }
     if !rows.is_empty() {
         menu.append(&PredefinedMenuItem::separator()).ok()?;
@@ -146,7 +154,10 @@ fn tick(
 ) {
     let sessions = registry.scan();
     let now = now_ms();
-    let rows: Vec<String> = sessions.iter().map(|s| render::row(s, now)).collect();
+    let rows: Vec<(String, u32)> = sessions
+        .iter()
+        .map(|s| (render::row(s, now), s.pid))
+        .collect();
 
     ui.apply(
         session::icon_state(&sessions),
@@ -165,7 +176,13 @@ fn tick(
         && let Some(popup) = popup
     {
         let owned: Vec<Session> = matching.into_iter().cloned().collect();
-        let lines: Vec<String> = owned.iter().map(|s| render::alert_row(s, now)).collect();
+        let lines: Vec<AlertRow> = owned
+            .iter()
+            .map(|s| AlertRow {
+                text: render::alert_row(s, now),
+                pid: s.pid,
+            })
+            .collect();
         popup.show(
             &render::alert_title(&owned),
             &lines,
@@ -177,13 +194,21 @@ fn tick(
 }
 
 /// A sample alert, so the look and sound can be checked without waiting for a session to block.
+/// The rows carry pid 0, so clicking one dismisses without chasing a window.
 fn show_test_alert(config: &Config, popup: Option<&Popup>) {
     if let Some(popup) = popup {
         popup.show(
             "Test alert",
             &[
-                "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt".to_string(),
-                "\u{25d0} claude-tray-97 \u{2014} BUSY 12s".to_string(),
+                AlertRow {
+                    text: "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt"
+                        .to_string(),
+                    pid: 0,
+                },
+                AlertRow {
+                    text: "\u{25d0} claude-tray-97 \u{2014} BUSY 12s".to_string(),
+                    pid: 0,
+                },
             ],
             (0xE5, 0x48, 0x2F),
             config.popup_secs,
@@ -198,12 +223,36 @@ fn show_test_alert(config: &Config, popup: Option<&Popup>) {
 fn demo_alert() {
     let config = Config::load();
     let Some(popup) = Popup::new() else { return };
+
+    // Prefer the sessions actually running, so clicking a row really does jump to one.
+    let now = now_ms();
+    let sessions = Registry::new().scan();
+    let rows: Vec<AlertRow> = if sessions.is_empty() {
+        vec![
+            AlertRow {
+                text: "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt"
+                    .to_string(),
+                pid: 0,
+            },
+            AlertRow {
+                text: "\u{25cf} claude-tray-97 \u{2014} WAITING 38s \u{b7} input needed"
+                    .to_string(),
+                pid: 0,
+            },
+        ]
+    } else {
+        sessions
+            .iter()
+            .map(|s| AlertRow {
+                text: render::alert_row(s, now),
+                pid: s.pid,
+            })
+            .collect()
+    };
+
     popup.show(
-        "2 Claude sessions are waiting on you",
-        &[
-            "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt".to_string(),
-            "\u{25cf} claude-tray-97 \u{2014} WAITING 38s \u{b7} input needed".to_string(),
-        ],
+        &render::alert_title(&sessions),
+        &rows,
         (0xE5, 0x48, 0x2F),
         0,
         config.sound,
@@ -304,7 +353,10 @@ fn main() {
     ui.apply(
         state,
         render::header(&sessions),
-        sessions.iter().map(|s| render::row(s, now)).collect(),
+        sessions
+            .iter()
+            .map(|s| (render::row(s, now), s.pid))
+            .collect(),
         render::tooltip(&sessions),
     );
 
@@ -348,8 +400,14 @@ fn main() {
         for id in ids {
             if id == EXIT_ID {
                 unsafe { PostQuitMessage(0) };
-            } else if id == SETTINGS_ID && let Some(settings) = settings.as_ref() {
-                settings.open(&config);
+            } else if id == SETTINGS_ID {
+                if let Some(settings) = settings.as_ref() {
+                    settings.open(&config);
+                }
+            } else if let Some(pid) = id.strip_prefix("session.")
+                && let Ok(pid) = pid.parse::<u32>()
+            {
+                activate::focus_session(pid);
             }
         }
 

@@ -15,7 +15,8 @@ tray icon:  ( 2 )   red disc   -> 2 sessions waiting on you
             ( 4 )   gray ring  -> 4 sessions, all idle
 ```
 
-Click the icon for the session list. Rows are sorted attention-first (waiting → busy → idle), then
+Click the icon for the session list, and a row in it to jump to that session. Rows are sorted
+attention-first (waiting → busy → idle), then
 oldest-first within a status, so the session that has been stuck longest is always at the top — as
 below, where a permission prompt pulls `api-gateway-f6` to the top of the list.
 
@@ -63,8 +64,14 @@ that *newly* enters one interrupts that schedule and alerts immediately, so a fr
 prompt never waits out the remainder of a repeat interval. When nothing matches any more, the
 schedule re-arms, so the next one alerts at once.
 
-Click the alert to dismiss it. It never takes focus (`WS_EX_NOACTIVATE`), so it cannot swallow a
-keystroke meant for the terminal you are typing in. It is a plain Win32 window rather than a WinRT
+Click a row in the alert to jump to that session — it raises the window hosting it and dismisses
+the alert. Rows highlight under the pointer and show a hand cursor, and hovering holds the alert
+open so it cannot expire on the way to a click. Clicking anywhere else just dismisses. Session
+rows in the tray menu do the same thing. See the limitations below for what "jump to" can and
+cannot mean.
+
+The alert never takes focus (`WS_EX_NOACTIVATE`), so it cannot swallow a keystroke meant for the
+terminal you are typing in. It is a plain Win32 window rather than a WinRT
 toast on purpose: a toast needs a registered AppUserModelID and a Start-menu shortcut, and Focus
 Assist and the per-app notification switches can silently suppress it — the wrong behaviour for
 something whose whole job is to be seen.
@@ -129,8 +136,13 @@ $s.Save()
   messaging pipe instead). Where that is the case every session reads as `Unknown`, the icon stays
   a gray ring with a live count, and the waiting/busy colours never appear. Alerts still work —
   tick **Unknown / not reported** under Settings → Alert me about.
-- Clicking a session row does nothing. Windows Terminal has no API to activate a specific tab, so
-  "click to jump to that session" can't be done properly; the rows are informational.
+- Clicking a session row raises the window *hosting* that session, not the session itself. A
+  session is a console process with no window of its own, so the row walks up the process tree to
+  the first real top-level window — the Claude desktop app, Windows Terminal, a console host.
+  Where a host runs several sessions in one window (the desktop app runs them all under a single
+  window), every one of those rows raises that same window and lands on whichever tab was last
+  open. Selecting the tab would mean driving Claude Code over the private pipe named in
+  `messagingSocketPath`, which is undocumented and which this program deliberately does not touch.
 - The menu is a snapshot from the moment it opened — Windows can't repaint an open menu, so elapsed
   times freeze until you close and reopen it.
 - Menu rows use the system menu font, which is proportional, so columns are separated with `—` and
