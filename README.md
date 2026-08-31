@@ -60,7 +60,7 @@ things meant reopening the menu three times.
 | Setting | Default | Choices |
 | --- | --- | --- |
 | Show desktop alerts | on | on / off |
-| Alert me about | Waiting on you | any of waiting, busy, shell, idle, unknown |
+| Alert me about | Waiting on you | any of waiting, busy, shell, finished-unread, finished, unknown |
 | Repeat alert | Every minute | only once, 30s, 1m, 2m, 5m, 10m, 15m, 30m |
 | Alert sound | Notification | none, system beep, notification, asterisk, exclamation, critical stop, question |
 | Alert stays for | 8 seconds | until clicked, 5s, 8s, 15s, 30s |
@@ -105,6 +105,33 @@ To see either without going through the tray:
 .\target\release\claude-tray.exe --demo-alert
 .\target\release\claude-tray.exe --demo-settings
 ```
+
+## What the desktop app knows
+
+The session registry says a session exists; it does not say what has happened to it, and on builds
+that never write `status` it says nothing at all. The Claude desktop app keeps its own record per
+session, and keeps it current:
+
+```
+%APPDATA%\Claude\claude-code-sessions\<workspace>\<project>\local_<uuid>.json
+```
+
+```json
+{"sessionId":"local_193507c2-…","cliSessionId":"d476abc9-…","title":"DevQA email sending debug",
+ "lastFocusedAt":1788209553150,"lastActivityAt":1788209618351,"isArchived":false}
+```
+
+`lastActivityAt` against `lastFocusedAt` is exactly what the app's blue dot means: something
+happened in that session since you last looked at it. Where the registry reports no status, that
+gives two of the app's states honestly — **finished, not looked at** (blue, filled) and
+**finished** (hollow) — and the row's elapsed time becomes time since last activity rather than
+the session's age. A status the registry does report always wins over this.
+
+`sessionId` here is also the id the app's deep links expect. It is **not** `local_` plus the CLI
+session id: the two are different uuids, related only through `cliSessionId`, so a link built from
+the CLI id passes the app's format check and then matches nothing in its store.
+
+Records are re-read only when their file changes.
 
 ## Where the data comes from
 

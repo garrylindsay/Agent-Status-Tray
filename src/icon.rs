@@ -158,6 +158,8 @@ pub const HEIGHT: u32 = SIZE;
 pub const DOT_WAITING: Rgba = [0xFA, 0xB2, 0x19, 0xFF];
 pub const DOT_WORKING: Rgba = [0x6A, 0x69, 0x65, 0xFF];
 pub const DOT_DONE: Rgba = [0x4B, 0x4A, 0x47, 0xFF];
+/// Finished, with something you have not looked at yet.
+pub const DOT_UNREAD: Rgba = [0x2A, 0x78, 0xD6, 0xFF];
 
 /// Colour and fill for a status, following the Claude desktop app's convention: amber is waiting
 /// on you, grey filled is working, a hollow ring is finished.
@@ -174,6 +176,7 @@ pub fn status_dot(status: Status) -> (Rgba, bool) {
     match status {
         Status::Waiting => (DOT_WAITING, true),
         Status::Busy | Status::Shell => (DOT_WORKING, true),
+        Status::Unread => (DOT_UNREAD, true),
         Status::Idle | Status::Unknown => (DOT_DONE, false),
     }
 }
@@ -257,6 +260,8 @@ mod tests {
         assert_eq!(status_dot(Status::Idle), (DOT_DONE, false));
         assert_eq!(status_dot(Status::Unknown), (DOT_DONE, false));
         assert!(!status_dot(Status::Idle).1);
+        // Unread is filled: it is something to act on, not a finished-and-seen ring.
+        assert_eq!(status_dot(Status::Unread), (DOT_UNREAD, true));
     }
 
     #[test]

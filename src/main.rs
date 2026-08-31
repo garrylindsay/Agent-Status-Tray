@@ -10,6 +10,7 @@
 mod activate;
 mod alert;
 mod config;
+mod desktop;
 mod icon;
 mod liveness;
 mod notify;
@@ -32,6 +33,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use alert::Alerter;
 use config::Config;
+use desktop::Desktop;
 use notify::{AlertRow, Popup};
 use session::{IconState, Registry, Session, Status};
 use settings::SettingsWindow;
@@ -185,6 +187,7 @@ fn sample_sessions(now_ms: u64) -> Vec<Session> {
             title: Some("Rate limiting rollout".to_string()),
             session_id: None,
             entrypoint: None,
+            desktop_session_id: None,
             status: Status::Waiting,
             waiting_for: Some("permission prompt".to_string()),
             since: now_ms.saturating_sub(240_000),
@@ -196,6 +199,7 @@ fn sample_sessions(now_ms: u64) -> Vec<Session> {
             title: Some("Claude-tray repo setup".to_string()),
             session_id: None,
             entrypoint: None,
+            desktop_session_id: None,
             status: Status::Busy,
             waiting_for: None,
             since: now_ms.saturating_sub(12_000),
@@ -217,6 +221,8 @@ fn accent_for(sessions: &[Session]) -> (u8, u8, u8) {
         .any(|s| matches!(s.status, Status::Busy | Status::Shell))
     {
         icon::DOT_WORKING
+    } else if sessions.iter().any(|s| s.status == Status::Unread) {
+        icon::DOT_UNREAD
     } else {
         icon::DOT_DONE
     };
@@ -231,6 +237,7 @@ fn tick(
     alerter: &mut Alerter,
     popup: Option<&Popup>,
     titles: &mut Titles,
+    desktop: &mut Desktop,
 ) -> Vec<Session> {
     // Cheap, and guarded against re-flushing, so the menu follows a theme switched mid-run.
     theme::sync_menu_theme();
@@ -243,6 +250,8 @@ fn tick(
             session.title = titles.get(&session.cwd, &id);
         }
     }
+
+    desktop.apply(&mut sessions);
     let live: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
     titles.retain(&live);
     let now = now_ms();
@@ -304,12 +313,14 @@ fn demo_alert() {
     // Prefer the sessions actually running, so clicking a row really does jump to one.
     let now = now_ms();
     let mut titles = Titles::new();
+    let mut desktop = Desktop::new();
     let mut sessions = Registry::new().scan();
     for session in &mut sessions {
         if let Some(id) = session.session_id.clone() {
             session.title = titles.get(&session.cwd, &id);
         }
     }
+    desktop.apply(&mut sessions);
     if sessions.is_empty() {
         sessions = sample_sessions(now);
     }
@@ -396,12 +407,14 @@ fn main() {
     let mut registry = Registry::new();
     let mut alerter = Alerter::new();
     let mut titles = Titles::new();
+    let mut desktop = Desktop::new();
     let mut sessions = registry.scan();
     for session in &mut sessions {
         if let Some(id) = session.session_id.clone() {
             session.title = titles.get(&session.cwd, &id);
         }
     }
+    desktop.apply(&mut sessions);
     let state = session::icon_state(&sessions);
 
     // Right-click opens the menu, as every other tray icon does. Left-click is deliberately left
@@ -466,6 +479,7 @@ fn main() {
                 &mut alerter,
                 popup.as_ref(),
                 &mut titles,
+                &mut desktop,
             );
         }
         unsafe {

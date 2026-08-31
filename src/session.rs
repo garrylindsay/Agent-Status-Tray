@@ -19,6 +19,9 @@ pub enum Status {
     Waiting,
     Busy,
     Shell,
+    /// Finished, with something you have not looked at yet. Not a registry status: it comes from
+    /// the desktop app's record of when you last focused the session.
+    Unread,
     Idle,
     Unknown,
 }
@@ -39,6 +42,7 @@ impl Status {
             Status::Waiting => "WAITING",
             Status::Busy => "BUSY",
             Status::Shell => "SHELL",
+            Status::Unread => "UNREAD",
             Status::Idle => "IDLE",
             Status::Unknown => "?",
         }
@@ -50,7 +54,8 @@ impl Status {
             Status::Waiting => "Waiting on you",
             Status::Busy => "Busy",
             Status::Shell => "Running a shell command",
-            Status::Idle => "Idle",
+            Status::Unread => "Finished, not looked at",
+            Status::Idle => "Finished",
             Status::Unknown => "Unknown / not reported",
         }
     }
@@ -60,8 +65,9 @@ impl Status {
         match self {
             Status::Waiting => 0,
             Status::Busy | Status::Shell => 1,
-            Status::Idle => 2,
-            Status::Unknown => 3,
+            Status::Unread => 2,
+            Status::Idle => 3,
+            Status::Unknown => 4,
         }
     }
 }
@@ -90,6 +96,9 @@ pub struct Session {
     pub cwd: String,
     /// Conversation title, when one has been set or generated for the session.
     pub title: Option<String>,
+    /// The desktop app's id for this session, when it has a record of it. Its deep links expect
+    /// this, not the CLI session id.
+    pub desktop_session_id: Option<String>,
     /// Claude Code's own id for the session, used to build a deep link.
     pub session_id: Option<String>,
     pub entrypoint: Option<String>,
@@ -102,10 +111,11 @@ pub struct Session {
 impl Session {
     /// Deep link that opens this exact session in the Claude desktop app.
     ///
-    /// The app's handler validates `session` against `^local_[A-Za-z0-9-]{1,64}$` and matches it
-    /// to its own store, where ids are minted as `local_<uuid>` — the uuid being the `sessionId`
-    /// in the registry file. Only offered for sessions the desktop app is hosting: firing
-    /// `claude://` for a session running in a terminal would raise the wrong application.
+    /// The app's handler validates `session` against `^local_[A-Za-z0-9-]{1,64}$` and then looks
+    /// it up as `sessionId` in its own store. That id is **not** `local_` plus the CLI session id
+    /// — the two are different uuids — so it has to come from the desktop record, and no link is
+    /// offered without one. Only for sessions the desktop app is hosting: firing `claude://` for a
+    /// session running in a terminal would raise the wrong application.
     ///
     /// As of Claude desktop 1.40609.0 the handler is behind a server-side feature flag and logs
     /// `code entry deep link gated off`, so this currently resolves to nothing happening. It costs
@@ -114,15 +124,16 @@ impl Session {
         if self.entrypoint.as_deref() != Some("claude-desktop") {
             return None;
         }
-        let id = self.session_id.as_deref()?;
-        if id.is_empty()
-            || id.len() > 57
-            || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        let id = self.desktop_session_id.as_deref()?;
+        let body = id.strip_prefix("local_")?;
+        if body.is_empty()
+            || body.len() > 64
+            || !body.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
         {
             return None;
         }
         Some(format!(
-            "claude://code/continue?session=local_{id}&source=desktop_action"
+            "claude://code/continue?session={id}&source=desktop_action"
         ))
     }
 }
@@ -234,6 +245,7 @@ impl Registry {
                 name: display_name(pid, &raw),
                 cwd: raw.cwd.clone(),
                 title: None,
+                desktop_session_id: None,
                 session_id: raw
                     .session_id
                     .as_deref()
@@ -324,13 +336,14 @@ mod tests {
         assert!(!liveness::is_claude_process(std::process::id()));
     }
 
-    fn session(entrypoint: Option<&str>, session_id: Option<&str>) -> Session {
+    fn session(entrypoint: Option<&str>, desktop_session_id: Option<&str>) -> Session {
         Session {
             pid: 1,
             name: "x".to_string(),
             cwd: String::new(),
             title: None,
-            session_id: session_id.map(str::to_string),
+            desktop_session_id: desktop_session_id.map(str::to_string),
+            session_id: Some("48a3f9c8-1785-4075-a0e0-e46e97574e8b".to_string()),
             entrypoint: entrypoint.map(str::to_string),
             status: Status::Idle,
             waiting_for: None,
@@ -338,46 +351,59 @@ mod tests {
         }
     }
 
-    /// The `local_` prefix and the exact query shape are what the desktop app validates.
+    /// The link carries the desktop app's own id verbatim. It is a different uuid from the CLI
+    /// session id, so building `local_<cliSessionId>` would pass the app's format check and then
+    /// match nothing in its store.
     #[test]
-    fn deep_link_matches_what_the_app_accepts() {
+    fn deep_link_uses_the_desktop_id_not_the_cli_one() {
         let s = session(
             Some("claude-desktop"),
-            Some("48a3f9c8-1785-4075-a0e0-e46e97574e8b"),
+            Some("local_193507c2-d1ff-4a54-9d6b-c84a4dd1bb33"),
         );
         assert_eq!(
             s.deep_link().as_deref(),
             Some(
-                "claude://code/continue?session=local_48a3f9c8-1785-4075-a0e0-e46e97574e8b\
+                "claude://code/continue?session=local_193507c2-d1ff-4a54-9d6b-c84a4dd1bb33\
                  &source=desktop_action"
             )
         );
+        // Nothing is invented from the CLI id when the desktop record is missing.
+        assert!(session(Some("claude-desktop"), None).deep_link().is_none());
     }
 
     /// Firing `claude://` for a terminal-hosted session would raise the wrong application.
     #[test]
     fn only_desktop_hosted_sessions_get_a_deep_link() {
-        assert!(session(Some("interactive"), Some("abc")).deep_link().is_none());
-        assert!(session(None, Some("abc")).deep_link().is_none());
-        assert!(session(Some("claude-desktop"), None).deep_link().is_none());
+        assert!(
+            session(Some("interactive"), Some("local_abc"))
+                .deep_link()
+                .is_none()
+        );
+        assert!(session(None, Some("local_abc")).deep_link().is_none());
     }
 
     /// Anything the app's regex would reject is not worth launching a process for.
     #[test]
     fn ids_that_would_fail_validation_are_refused() {
-        assert!(session(Some("claude-desktop"), Some("")).deep_link().is_none());
+        // Must carry the prefix the app's pattern requires.
         assert!(
-            session(Some("claude-desktop"), Some("has space"))
+            session(Some("claude-desktop"), Some("193507c2"))
+                .deep_link()
+                .is_none()
+        );
+        assert!(session(Some("claude-desktop"), Some("local_")).deep_link().is_none());
+        assert!(
+            session(Some("claude-desktop"), Some("local_has space"))
                 .deep_link()
                 .is_none()
         );
         assert!(
-            session(Some("claude-desktop"), Some("semi;colon"))
+            session(Some("claude-desktop"), Some("local_semi;colon"))
                 .deep_link()
                 .is_none()
         );
-        // `local_` plus this is 65 characters, one past what the app allows.
-        let too_long = "a".repeat(58);
+        // One character past what the app allows after the prefix.
+        let too_long = format!("local_{}", "a".repeat(65));
         assert!(
             session(Some("claude-desktop"), Some(&too_long))
                 .deep_link()

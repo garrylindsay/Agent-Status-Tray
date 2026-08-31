@@ -94,6 +94,14 @@ pub fn alert_title(sessions: &[Session]) -> String {
         };
     }
 
+    if sessions.iter().all(|s| s.status == Status::Unread) {
+        return if n == 1 {
+            "1 Claude session finished".to_string()
+        } else {
+            format!("{n} Claude sessions finished")
+        };
+    }
+
     if sessions.iter().all(|s| s.status == Status::Unknown) {
         return if n == 1 {
             "1 Claude session open".to_string()
@@ -187,6 +195,7 @@ mod tests {
             title: None,
             session_id: None,
             entrypoint: None,
+            desktop_session_id: None,
             status,
             waiting_for: None,
             since: 0,

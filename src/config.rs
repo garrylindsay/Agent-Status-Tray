@@ -52,10 +52,11 @@ impl Sound {
 }
 
 /// Statuses that can be chosen as notification triggers, in menu order.
-pub const NOTIFIABLE: [Status; 5] = [
+pub const NOTIFIABLE: [Status; 6] = [
     Status::Waiting,
     Status::Busy,
     Status::Shell,
+    Status::Unread,
     Status::Idle,
     Status::Unknown,
 ];
