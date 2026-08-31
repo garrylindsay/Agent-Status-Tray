@@ -35,7 +35,9 @@ fn escape_mnemonics(text: &str) -> String {
     text.replace('&', "&&")
 }
 
-/// One row: `● api-gateway-f6 — WAITING 4m · permission prompt`
+/// One row: `api-gateway-f6 — WAITING 4m · permission prompt`
+///
+/// The status dot is drawn rather than written, so it is not part of this text.
 ///
 /// A session whose status was never reported gets `◌ name — up 4h36m` instead. Printing a `?`
 /// where a status belongs reads as a state the session is in, and the duration beside it is the
@@ -44,16 +46,10 @@ fn escape_mnemonics(text: &str) -> String {
 pub fn row_text(session: &Session, now_ms: u64) -> String {
     let age = elapsed(now_ms.saturating_sub(session.since));
     if session.status == Status::Unknown {
-        return format!("{} {} \u{2014} up {}", session.status.glyph(), session.name, age);
+        return format!("{} \u{2014} up {}", session.name, age);
     }
 
-    let mut text = format!(
-        "{} {} \u{2014} {} {}",
-        session.status.glyph(),
-        session.name,
-        session.status.label(),
-        age
-    );
+    let mut text = format!("{} \u{2014} {} {}", session.name, session.status.label(), age);
     if let Some(reason) = &session.waiting_for {
         text.push_str(" \u{00b7} ");
         text.push_str(reason);

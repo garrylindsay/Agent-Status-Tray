@@ -14,8 +14,9 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect,
-    InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
+    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, Ellipse,
+    EndPaint, FillRect, InvalidateRect, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode,
+    SetTextColor,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -88,6 +89,8 @@ pub struct AlertRow {
     pub pid: u32,
     /// `claude://` link that opens this exact session, where the host supports one.
     pub deep_link: Option<String>,
+    /// Status dot: colour, and whether it is filled or a hollow ring.
+    pub dot: ([u8; 4], bool),
 }
 
 /// What the window paints on its next `WM_PAINT`.
@@ -103,6 +106,57 @@ struct Content {
     duration_secs: u64,
     /// System colours, sampled when the alert is shown.
     palette: Option<Palette>,
+}
+
+/// Space reserved at the left of a row for its status dot.
+const DOT_COLUMN: i32 = 16;
+const DOT_R: i32 = 5;
+
+/// Fills a circle of `radius` at `(cx, cy)` in one colour.
+unsafe fn circle(
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: COLORREF,
+) {
+    unsafe {
+        // Ellipse outlines with the current pen, so the pen has to match or the edge reads as a
+        // darker ring around the dot.
+        let pen = CreatePen(PS_SOLID, 1, color);
+        let brush = CreateSolidBrush(color);
+        let old_pen = SelectObject(hdc, pen as _);
+        let old_brush = SelectObject(hdc, brush as _);
+
+        Ellipse(hdc, cx - radius, cy - radius, cx + radius, cy + radius);
+
+        SelectObject(hdc, old_pen);
+        SelectObject(hdc, old_brush);
+        DeleteObject(pen as _);
+        DeleteObject(brush as _);
+    }
+}
+
+/// A filled dot or a hollow ring, drawn to match the Claude desktop app's session list.
+unsafe fn draw_dot(
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    cx: i32,
+    cy: i32,
+    dot: ([u8; 4], bool),
+) {
+    unsafe {
+        let ([r, g, b, _], filled) = dot;
+        circle(hdc, cx, cy, DOT_R, rgb(r, g, b));
+
+        if !filled {
+            // Punch the middle out against the card, leaving a ring.
+            let background = CONTENT
+                .with(|c| c.borrow().palette)
+                .map(|p| p.background)
+                .unwrap_or_else(|| rgb(0x1F, 0x1F, 0x23));
+            circle(hdc, cx, cy, DOT_R - 2, background);
+        }
+    }
 }
 
 /// Y of the first session row, which is where hit-testing starts.
@@ -427,9 +481,11 @@ unsafe fn paint(hwnd: HWND) {
                 DeleteObject(brush as _);
             }
 
+            draw_dot(hdc, ACCENT_W + PAD + 5, y + ROW_H / 2, row.dot);
+
             SetTextColor(hdc, palette.text);
             let mut r = RECT {
-                left: ACCENT_W + PAD,
+                left: ACCENT_W + PAD + DOT_COLUMN,
                 top: y,
                 right: WIDTH - PAD,
                 bottom: y + ROW_H,
@@ -448,7 +504,7 @@ unsafe fn paint(hwnd: HWND) {
         if content.overflow > 0 {
             SetTextColor(hdc, palette.dim);
             let mut r = RECT {
-                left: ACCENT_W + PAD,
+                left: ACCENT_W + PAD + DOT_COLUMN,
                 top: y,
                 right: WIDTH - PAD,
                 bottom: y + ROW_H,

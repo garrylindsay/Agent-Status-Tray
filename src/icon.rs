@@ -2,7 +2,7 @@
 //!
 //! 32x32 RGBA, rendered from scratch so there are no image assets or font dependencies.
 
-use crate::session::{IconKind, IconState};
+use crate::session::{IconKind, IconState, Status};
 
 const SIZE: u32 = 32;
 const OUTER_R: f32 = 15.0;
@@ -153,6 +153,67 @@ fn draw_badge(buf: &mut [u8], glyphs: &[usize], color: Rgba) {
 pub const WIDTH: u32 = SIZE;
 pub const HEIGHT: u32 = SIZE;
 
+/// Status dot colours, sampled from the Claude desktop app's own session list so a row here reads
+/// the same as the corresponding row there.
+pub const DOT_WAITING: Rgba = [0xFA, 0xB2, 0x19, 0xFF];
+pub const DOT_WORKING: Rgba = [0x6A, 0x69, 0x65, 0xFF];
+pub const DOT_DONE: Rgba = [0x4B, 0x4A, 0x47, 0xFF];
+
+/// Colour and fill for a status, following the Claude desktop app's convention: amber is waiting
+/// on you, grey filled is working, a hollow ring is finished.
+///
+/// The app also distinguishes "finished and seen" (hollow) from "finished and not yet seen"
+/// (blue). Nothing here knows whether you have looked at a session, so idle takes the hollow
+/// ring — claiming the blue would be inventing the one fact that separates them.
+///
+/// A session whose status was never reported takes the same hollow ring. A fifth, dimmer grey was
+/// tried to keep the two apart, but at this size a shade of grey communicates nothing, and on a
+/// build that reports no status at all it just washes out every row. The row text carries the
+/// distinction instead: `IDLE 4m` against `up 4h56m`.
+pub fn status_dot(status: Status) -> (Rgba, bool) {
+    match status {
+        Status::Waiting => (DOT_WAITING, true),
+        Status::Busy | Status::Shell => (DOT_WORKING, true),
+        Status::Idle | Status::Unknown => (DOT_DONE, false),
+    }
+}
+
+/// Size of the dot bitmap handed to the tray menu.
+pub const DOT_SIZE: u32 = 16;
+const DOT_R: f32 = 4.6;
+const DOT_RING_INNER_R: f32 = 2.9;
+
+/// A single status dot as RGBA, for a menu item's icon.
+pub fn dot_rgba(color: Rgba, filled: bool) -> Vec<u8> {
+    let mut buf = vec![0u8; (DOT_SIZE * DOT_SIZE * 4) as usize];
+    let center = DOT_SIZE as f32 / 2.0;
+
+    for y in 0..DOT_SIZE {
+        for x in 0..DOT_SIZE {
+            let mut hits = 0u32;
+            for sy in 0..AA {
+                for sx in 0..AA {
+                    let px = x as f32 + (sx as f32 + 0.5) / AA as f32 - center;
+                    let py = y as f32 + (sy as f32 + 0.5) / AA as f32 - center;
+                    let d = (px * px + py * py).sqrt();
+                    if d <= DOT_R && (filled || d >= DOT_RING_INNER_R) {
+                        hits += 1;
+                    }
+                }
+            }
+            if hits > 0 {
+                let idx = ((y * DOT_SIZE + x) * 4) as usize;
+                blend(
+                    &mut buf[idx..idx + 4],
+                    color,
+                    hits as f32 / (AA * AA) as f32,
+                );
+            }
+        }
+    }
+    buf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +245,37 @@ mod tests {
             count: 2,
         };
         assert_eq!(render(state).len(), (WIDTH * HEIGHT * 4) as usize);
+    }
+
+    /// Amber must mean waiting and nothing else: it is the one colour that says "act now".
+    #[test]
+    fn status_colours_follow_the_desktop_app() {
+        assert_eq!(status_dot(Status::Waiting), (DOT_WAITING, true));
+        assert_eq!(status_dot(Status::Busy), (DOT_WORKING, true));
+        assert_eq!(status_dot(Status::Shell), (DOT_WORKING, true));
+        // Neither finished nor unreported is ever filled: only an active session is.
+        assert_eq!(status_dot(Status::Idle), (DOT_DONE, false));
+        assert_eq!(status_dot(Status::Unknown), (DOT_DONE, false));
+        assert!(!status_dot(Status::Idle).1);
+    }
+
+    #[test]
+    fn a_dot_is_rgba_of_the_declared_size() {
+        assert_eq!(
+            dot_rgba(DOT_WAITING, true).len(),
+            (DOT_SIZE * DOT_SIZE * 4) as usize
+        );
+    }
+
+    /// A hollow ring must actually have a hole, or it is just a filled dot.
+    #[test]
+    fn a_hollow_dot_is_transparent_in_the_middle() {
+        let ring = dot_rgba(DOT_DONE, false);
+        let middle = (((DOT_SIZE / 2) * DOT_SIZE + DOT_SIZE / 2) * 4) as usize;
+        assert_eq!(ring[middle + 3], 0, "ring centre is not transparent");
+
+        let filled = dot_rgba(DOT_DONE, true);
+        assert!(filled[middle + 3] > 0, "filled dot has a hole");
     }
 
     #[test]

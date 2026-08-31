@@ -22,7 +22,7 @@ use std::ptr;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{IconMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, KillTimer, MSG, PostQuitMessage, SetTimer, TranslateMessage,
@@ -76,13 +76,7 @@ impl Ui {
         }
     }
 
-    fn apply(
-        &mut self,
-        state: IconState,
-        header: String,
-        rows: Vec<(String, u32)>,
-        tooltip: String,
-    ) {
+    fn apply(&mut self, state: IconState, header: String, rows: Vec<MenuRow>, tooltip: String) {
         if self.icon_state != Some(state) {
             if let Some(icon) = make_icon(state) {
                 let _ = self.tray.set_icon(Some(icon));
@@ -111,14 +105,29 @@ impl Ui {
 ///
 /// Settings deliberately open a window rather than living in submenus here: a Win32 menu closes on
 /// every click, so changing several settings meant reopening the menu once per change.
-fn build_menu(header: &str, rows: &[(String, u32)]) -> Option<Menu> {
+fn build_menu(header: &str, rows: &[MenuRow]) -> Option<Menu> {
     let menu = Menu::new();
 
     menu.append(&MenuItem::new(header, false, None)).ok()?;
     menu.append(&PredefinedMenuItem::separator()).ok()?;
-    for (text, pid) in rows {
-        menu.append(&MenuItem::with_id(format!("session.{pid}"), text, true, None))
-            .ok()?;
+    for row in rows {
+        // A menu item's icon is the only way to get colour into a native Win32 menu without
+        // owner-drawing every item.
+        let (color, filled) = row.dot;
+        let dot = tray_icon::menu::Icon::from_rgba(
+            icon::dot_rgba(color, filled),
+            icon::DOT_SIZE,
+            icon::DOT_SIZE,
+        )
+        .ok();
+        menu.append(&IconMenuItem::with_id(
+            format!("session.{}", row.pid),
+            &row.text,
+            true,
+            dot,
+            None,
+        ))
+        .ok()?;
     }
     if !rows.is_empty() {
         menu.append(&PredefinedMenuItem::separator()).ok()?;
@@ -130,6 +139,24 @@ fn build_menu(header: &str, rows: &[(String, u32)]) -> Option<Menu> {
     menu.append(&MenuItem::with_id(EXIT_ID, "Exit", true, None))
         .ok()?;
     Some(menu)
+}
+
+/// One session as the tray menu shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MenuRow {
+    text: String,
+    pid: u32,
+    dot: ([u8; 4], bool),
+}
+
+impl MenuRow {
+    fn new(session: &Session, now_ms: u64) -> MenuRow {
+        MenuRow {
+            text: render::row(session, now_ms),
+            pid: session.pid,
+            dot: icon::status_dot(session.status),
+        }
+    }
 }
 
 /// Accent for the alert, taken from the most urgent session in it.
@@ -158,10 +185,7 @@ fn tick(
     theme::sync_menu_theme();
     let sessions = registry.scan();
     let now = now_ms();
-    let rows: Vec<(String, u32)> = sessions
-        .iter()
-        .map(|s| (render::row(s, now), s.pid))
-        .collect();
+    let rows: Vec<MenuRow> = sessions.iter().map(|s| MenuRow::new(s, now)).collect();
 
     ui.apply(
         session::icon_state(&sessions),
@@ -186,6 +210,7 @@ fn tick(
                 text: render::alert_row(s, now),
                 pid: s.pid,
                 deep_link: s.deep_link(),
+                dot: icon::status_dot(s.status),
             })
             .collect();
         popup.show(
@@ -212,11 +237,13 @@ fn show_test_alert(config: &Config, popup: Option<&Popup>) {
                         .to_string(),
                     pid: 0,
                     deep_link: None,
+                    dot: icon::status_dot(Status::Waiting),
                 },
                 AlertRow {
                     text: "\u{25d0} claude-tray-97 \u{2014} BUSY 12s".to_string(),
                     pid: 0,
                     deep_link: None,
+                    dot: icon::status_dot(Status::Waiting),
                 },
             ],
             (0xE5, 0x48, 0x2F),
@@ -243,12 +270,14 @@ fn demo_alert() {
                     .to_string(),
                 pid: 0,
                 deep_link: None,
+                dot: icon::status_dot(Status::Waiting),
             },
             AlertRow {
                 text: "\u{25cf} claude-tray-97 \u{2014} WAITING 38s \u{b7} input needed"
                     .to_string(),
                 pid: 0,
                 deep_link: None,
+                dot: icon::status_dot(Status::Waiting),
             },
         ]
     } else {
@@ -258,6 +287,7 @@ fn demo_alert() {
                 text: render::alert_row(s, now),
                 pid: s.pid,
                 deep_link: s.deep_link(),
+                dot: icon::status_dot(s.status),
             })
             .collect()
     };
@@ -372,10 +402,7 @@ fn main() {
     ui.apply(
         state,
         render::header(&sessions),
-        sessions
-            .iter()
-            .map(|s| (render::row(s, now), s.pid))
-            .collect(),
+        sessions.iter().map(|s| MenuRow::new(s, now)).collect(),
         render::tooltip(&sessions),
     );
 

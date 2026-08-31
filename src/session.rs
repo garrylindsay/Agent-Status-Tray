@@ -55,15 +55,6 @@ impl Status {
         }
     }
 
-    pub fn glyph(self) -> char {
-        match self {
-            Status::Waiting => '\u{25cf}', // ●
-            Status::Busy | Status::Shell => '\u{25d0}', // ◐
-            Status::Idle => '\u{25cb}',    // ○
-            Status::Unknown => '\u{25cc}', // ◌
-        }
-    }
-
     /// Sort key: attention-needing sessions first.
     fn rank(self) -> u8 {
         match self {
