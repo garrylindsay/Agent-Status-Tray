@@ -30,12 +30,20 @@ raise an Outlook-style alert in the corner of the screen while any session sits 
 asked to be told about, and repeat it on a schedule until you deal with it.
 
 ```
-┌─────────────────────────────────────────────┐
-│ 2 Claude sessions are waiting on you        │
-│ ● api-gateway-f6 — WAITING 4m · permission prompt
-│ ● claude-tray-97 — WAITING 38s · input needed
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ 2 Claude sessions are waiting on you                             │
+│ ● api-gateway-f6 · Rate limiting rollout — WAITING 4m · permission prompt
+│ ● claude-tray-97 · Claude-tray repo setup — WAITING 38s · input needed
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+Rows carry the conversation's own title beside the registry name. The registry name is derived
+from the folder (`claude-tray-97`), so it says *where* a session is but not what it is about, and
+two sessions in the same folder differ only by a suffix. The title is read from Claude Code's
+transcript for that session — `%USERPROFILE%\.claude\projects\<encoded cwd>\<sessionId>.jsonl` —
+preferring a title you set (`custom-title`) over a generated one (`ai-title`). Transcripts run to
+megabytes and grow constantly, so only the last 256KB is searched, and only when the file has
+changed since it was last read.
 
 Everything is configured from **Settings…** in the tray menu, which opens a panel that stays put
 while you work through it. Changes apply and are written to disk the moment you click them, so

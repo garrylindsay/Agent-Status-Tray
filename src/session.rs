@@ -86,6 +86,10 @@ struct Raw {
 pub struct Session {
     pub pid: u32,
     pub name: String,
+    /// Working directory, which locates the transcript holding the conversation title.
+    pub cwd: String,
+    /// Conversation title, when one has been set or generated for the session.
+    pub title: Option<String>,
     /// Claude Code's own id for the session, used to build a deep link.
     pub session_id: Option<String>,
     pub entrypoint: Option<String>,
@@ -228,6 +232,8 @@ impl Registry {
             sessions.push(Session {
                 pid,
                 name: display_name(pid, &raw),
+                cwd: raw.cwd.clone(),
+                title: None,
                 session_id: raw
                     .session_id
                     .as_deref()
@@ -322,6 +328,8 @@ mod tests {
         Session {
             pid: 1,
             name: "x".to_string(),
+            cwd: String::new(),
+            title: None,
             session_id: session_id.map(str::to_string),
             entrypoint: entrypoint.map(str::to_string),
             status: Status::Idle,

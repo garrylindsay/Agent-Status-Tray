@@ -33,8 +33,9 @@ use crate::theme::Palette;
 /// null-hwnd poll timer in `main`.
 const DISMISS_TIMER: usize = 1;
 
-/// Wide enough that a typical `name — WAITING 4m · permission prompt` row does not ellipsize.
-const WIDTH: i32 = 440;
+/// Wide enough for `name · conversation title — WAITING 4m · permission prompt` without
+/// ellipsizing the part that says what is wanted from you.
+const WIDTH: i32 = 580;
 const PAD: i32 = 14;
 const ACCENT_W: i32 = 4;
 const TITLE_H: i32 = 24;

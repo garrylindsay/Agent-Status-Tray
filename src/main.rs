@@ -17,6 +17,7 @@ mod render;
 mod session;
 mod settings;
 mod theme;
+mod title;
 
 use std::ptr;
 use std::sync::Mutex;
@@ -34,6 +35,7 @@ use config::Config;
 use notify::{AlertRow, Popup};
 use session::{IconState, Registry, Session, Status};
 use settings::SettingsWindow;
+use title::Titles;
 
 const EXIT_ID: &str = "claude-tray-exit";
 const SETTINGS_ID: &str = "claude-tray-settings";
@@ -180,10 +182,21 @@ fn tick(
     config: &Config,
     alerter: &mut Alerter,
     popup: Option<&Popup>,
+    titles: &mut Titles,
 ) -> Vec<Session> {
     // Cheap, and guarded against re-flushing, so the menu follows a theme switched mid-run.
     theme::sync_menu_theme();
-    let sessions = registry.scan();
+    let mut sessions = registry.scan();
+
+    // Titles come from the transcripts rather than the registry, and are cached against file size
+    // so an unchanged transcript is never re-read.
+    for session in &mut sessions {
+        if let Some(id) = session.session_id.clone() {
+            session.title = titles.get(&session.cwd, &id);
+        }
+    }
+    let live: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
+    titles.retain(&live);
     let now = now_ms();
     let rows: Vec<MenuRow> = sessions.iter().map(|s| MenuRow::new(s, now)).collect();
 
@@ -262,7 +275,13 @@ fn demo_alert() {
 
     // Prefer the sessions actually running, so clicking a row really does jump to one.
     let now = now_ms();
-    let sessions = Registry::new().scan();
+    let mut titles = Titles::new();
+    let mut sessions = Registry::new().scan();
+    for session in &mut sessions {
+        if let Some(id) = session.session_id.clone() {
+            session.title = titles.get(&session.cwd, &id);
+        }
+    }
     let rows: Vec<AlertRow> = if sessions.is_empty() {
         vec![
             AlertRow {
@@ -372,7 +391,13 @@ fn main() {
 
     let mut registry = Registry::new();
     let mut alerter = Alerter::new();
-    let sessions = registry.scan();
+    let mut titles = Titles::new();
+    let mut sessions = registry.scan();
+    for session in &mut sessions {
+        if let Some(id) = session.session_id.clone() {
+            session.title = titles.get(&session.cwd, &id);
+        }
+    }
     let state = session::icon_state(&sessions);
 
     // Right-click opens the menu, as every other tray icon does. Left-click is deliberately left
@@ -430,7 +455,14 @@ fn main() {
             && msg.hwnd.is_null()
             && msg.wParam == timer_id
         {
-            known = tick(&mut registry, &mut ui, &config, &mut alerter, popup.as_ref());
+            known = tick(
+                &mut registry,
+                &mut ui,
+                &config,
+                &mut alerter,
+                popup.as_ref(),
+                &mut titles,
+            );
         }
         unsafe {
             TranslateMessage(&msg);

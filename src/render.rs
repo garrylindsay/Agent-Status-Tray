@@ -45,11 +45,20 @@ fn escape_mnemonics(text: &str) -> String {
 /// claimed about what the session is doing.
 pub fn row_text(session: &Session, now_ms: u64) -> String {
     let age = elapsed(now_ms.saturating_sub(session.since));
+    let name = match &session.title {
+        // The registry name is derived from the folder, so it says where a session is but not
+        // what it is about; the conversation's own title is what tells them apart.
+        Some(title) if title != &session.name => {
+            format!("{} \u{00b7} {}", session.name, title)
+        }
+        _ => session.name.clone(),
+    };
+
     if session.status == Status::Unknown {
-        return format!("{} \u{2014} up {}", session.name, age);
+        return format!("{name} \u{2014} up {age}");
     }
 
-    let mut text = format!("{} \u{2014} {} {}", session.name, session.status.label(), age);
+    let mut text = format!("{name} \u{2014} {} {}", session.status.label(), age);
     if let Some(reason) = &session.waiting_for {
         text.push_str(" \u{00b7} ");
         text.push_str(reason);
@@ -174,6 +183,8 @@ mod tests {
         Session {
             pid: 1,
             name: name.to_string(),
+            cwd: String::new(),
+            title: None,
             session_id: None,
             entrypoint: None,
             status,
