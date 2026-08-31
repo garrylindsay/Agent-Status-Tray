@@ -203,22 +203,24 @@ fn sample_sessions(now_ms: u64) -> Vec<Session> {
     ]
 }
 
-/// Colour of the alert's left bar.
+/// Colour of the alert's left bar: the colour of the most urgent session in it.
 ///
-/// Amber when something is waiting on you, matching the dot; otherwise the Windows accent colour.
-/// Never grey: the alert only appears because you asked to be told about these sessions, and a
-/// grey bar reads as a dead notification.
+/// The bar says how much the alert wants from you, so it earns its colour rather than always
+/// having one. Amber when something is waiting, the working grey when something is running, and
+/// the same quiet grey as a hollow dot when everything is merely open — a bright bar over a list
+/// of sessions that need nothing is just crying wolf.
 fn accent_for(sessions: &[Session]) -> (u8, u8, u8) {
-    if sessions.iter().any(|s| s.status == Status::Waiting) {
-        let [r, g, b, _] = icon::DOT_WAITING;
-        return (r, g, b);
-    }
-    let accent = theme::Palette::current().accent;
-    (
-        (accent & 0xFF) as u8,
-        ((accent >> 8) & 0xFF) as u8,
-        ((accent >> 16) & 0xFF) as u8,
-    )
+    let [r, g, b, _] = if sessions.iter().any(|s| s.status == Status::Waiting) {
+        icon::DOT_WAITING
+    } else if sessions
+        .iter()
+        .any(|s| matches!(s.status, Status::Busy | Status::Shell))
+    {
+        icon::DOT_WORKING
+    } else {
+        icon::DOT_DONE
+    };
+    (r, g, b)
 }
 
 /// Returns the sessions it rendered, so a later menu click can resolve a pid back to one.

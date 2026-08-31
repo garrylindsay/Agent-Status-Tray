@@ -13,8 +13,9 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect,
-    InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
+    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, Ellipse,
+    EndPaint, FillRect, InvalidateRect, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode,
+    SetTextColor,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -88,7 +89,12 @@ enum Action {
 enum RowKind {
     Title(String),
     Section(String),
-    Check { label: String, checked: bool },
+    Check {
+        label: String,
+        checked: bool,
+        /// Status dot, so a row here can be matched to the dot on an alert.
+        dot: Option<([u8; 4], bool)>,
+    },
     Cycle { label: String, value: String },
     Button { label: String },
 }
@@ -135,6 +141,7 @@ fn layout(config: &Config) -> Vec<Row> {
         RowKind::Check {
             label: "Show desktop alerts".to_string(),
             checked: config.notifications_enabled,
+            dot: None,
         },
         ROW_H,
         Some(Action::ToggleEnabled),
@@ -152,6 +159,7 @@ fn layout(config: &Config) -> Vec<Row> {
             RowKind::Check {
                 label: status.menu_label().to_string(),
                 checked: config.notifies_on(status),
+                dot: Some(crate::icon::status_dot(status)),
             },
             ROW_H,
             Some(Action::ToggleStatus(status)),
@@ -581,10 +589,19 @@ unsafe fn paint(hwnd: HWND) {
                     draw(hdc, label, &mut text_rect, DT_SINGLELINE | DT_VCENTER);
                     SelectObject(hdc, body_font as _);
                 }
-                RowKind::Check { label, checked } => {
-                    draw_check(hdc, row.top + row.height / 2, *checked, &palette);
-                    SetTextColor(hdc, palette.text);
+                RowKind::Check {
+                    label,
+                    checked,
+                    dot,
+                } => {
+                    let middle = row.top + row.height / 2;
+                    draw_check(hdc, middle, *checked, &palette);
                     text_rect.left = PAD + 24;
+                    if let Some(dot) = dot {
+                        draw_dot(hdc, PAD + 30, middle, *dot, &palette);
+                        text_rect.left = PAD + 44;
+                    }
+                    SetTextColor(hdc, palette.text);
                     draw(
                         hdc,
                         label,
@@ -671,6 +688,44 @@ unsafe fn draw(hdc: windows_sys::Win32::Graphics::Gdi::HDC, text: &str, rect: &m
     unsafe {
         let mut buf = wide(text);
         DrawTextW(hdc, buf.as_mut_ptr(), -1, rect, flags | DT_NOPREFIX);
+    }
+}
+
+/// Fills a circle of `radius` at `(cx, cy)`.
+unsafe fn circle(
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: COLORREF,
+) {
+    unsafe {
+        let pen = CreatePen(PS_SOLID, 1, color);
+        let brush = CreateSolidBrush(color);
+        let old_pen = SelectObject(hdc, pen as _);
+        let old_brush = SelectObject(hdc, brush as _);
+        Ellipse(hdc, cx - radius, cy - radius, cx + radius, cy + radius);
+        SelectObject(hdc, old_pen);
+        SelectObject(hdc, old_brush);
+        DeleteObject(pen as _);
+        DeleteObject(brush as _);
+    }
+}
+
+/// The same status dot the alert draws, so the two can be matched by eye.
+unsafe fn draw_dot(
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    cx: i32,
+    cy: i32,
+    dot: ([u8; 4], bool),
+    palette: &Palette,
+) {
+    unsafe {
+        let ([r, g, b, _], filled) = dot;
+        circle(hdc, cx, cy, 5, rgb(r, g, b));
+        if !filled {
+            circle(hdc, cx, cy, 3, palette.background);
+        }
     }
 }
 
