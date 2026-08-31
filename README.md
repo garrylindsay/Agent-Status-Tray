@@ -31,8 +31,9 @@ request at all: it stores branch-to-PR links separately under `branchMetadata.pr
 branch, with a URL but no state, and nothing ties an agent to the branch it used. Marking those
 rows would mean asking GitHub, which this program does not do.
 
-A tray menu item can carry one icon and that is the status dot, so menu rows say the repository
-state in words (`· PR open`) where the alert draws the mark.
+A tray menu item gets a single icon, so the status dot and the repository mark share one 16px
+bitmap there — the dot a size down, the mark beside it. Menu rows also keep the state in words
+(`· PR open`), which the alert does not need because it has room to draw the mark full size.
 
 Cursor's **cloud agents** carry a real status and an unread flag, so every row shows genuine state.
 Its local chats are deliberately not listed: they live in `conversation-search.db` with a title and

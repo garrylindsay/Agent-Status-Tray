@@ -199,8 +199,79 @@ pub fn status_dot(status: Status) -> (Rgba, bool) {
     }
 }
 
-/// Size of the dot bitmap handed to the tray menu.
+/// Size of the bitmap handed to a tray menu item.
 pub const DOT_SIZE: u32 = 16;
+
+fn put(buf: &mut [u8], x: i32, y: i32, color: Rgba) {
+    if x < 0 || y < 0 || x >= DOT_SIZE as i32 || y >= DOT_SIZE as i32 {
+        return;
+    }
+    let idx = ((y as u32 * DOT_SIZE + x as u32) * 4) as usize;
+    buf[idx..idx + 4].copy_from_slice(&color);
+}
+
+/// Straight line, thick enough to survive the menu's own scaling.
+fn line(buf: &mut [u8], from: (i32, i32), to: (i32, i32), color: Rgba) {
+    let steps = (to.0 - from.0).abs().max((to.1 - from.1).abs()).max(1);
+    for step in 0..=steps {
+        let x = from.0 + (to.0 - from.0) * step / steps;
+        let y = from.1 + (to.1 - from.1) * step / steps;
+        put(buf, x, y, color);
+        put(buf, x, y + 1, color);
+    }
+}
+
+fn disc(buf: &mut [u8], cx: i32, cy: i32, radius: i32, color: Rgba) {
+    for y in (cy - radius)..=(cy + radius) {
+        for x in (cx - radius)..=(cx + radius) {
+            let (dx, dy) = (x - cx, y - cy);
+            if dx * dx + dy * dy <= radius * radius {
+                put(buf, x, y, color);
+            }
+        }
+    }
+}
+
+/// The bitmap for one menu row: the status dot, and the repository mark beside it when there is
+/// one.
+///
+/// A menu item gets a single icon, so both have to share it. Without a repository mark the dot
+/// keeps the whole bitmap and stays the size it always was.
+pub fn menu_icon_rgba(dot: (Rgba, bool), repo: Repo) -> Vec<u8> {
+    let (color, filled) = dot;
+    let Some(mark) = repo_mark(repo) else {
+        return dot_rgba(color, filled);
+    };
+
+    let mut buf = vec![0u8; (DOT_SIZE * DOT_SIZE * 4) as usize];
+    let mid = DOT_SIZE as i32 / 2;
+
+    // Status dot on the left, a size down to make room.
+    disc(&mut buf, 3, mid, 3, color);
+    if !filled {
+        disc(&mut buf, 3, mid, 1, [0, 0, 0, 0]);
+    }
+
+    match repo {
+        Repo::PrOpen | Repo::PrMerged => {
+            // An arrow into a node.
+            line(&mut buf, (8, mid), (12, mid), mark);
+            line(&mut buf, (10, mid - 2), (12, mid), mark);
+            line(&mut buf, (10, mid + 2), (12, mid), mark);
+            disc(&mut buf, 13, mid, 1, mark);
+        }
+        Repo::Branch => {
+            // A fork.
+            line(&mut buf, (10, mid + 4), (10, mid), mark);
+            line(&mut buf, (10, mid), (8, mid - 3), mark);
+            line(&mut buf, (10, mid), (13, mid - 3), mark);
+            disc(&mut buf, 8, mid - 3, 1, mark);
+            disc(&mut buf, 13, mid - 3, 1, mark);
+        }
+        Repo::Nothing => {}
+    }
+    buf
+}
 const DOT_R: f32 = 4.6;
 const DOT_RING_INNER_R: f32 = 2.9;
 
@@ -306,6 +377,29 @@ mod tests {
         assert_eq!(badge_glyphs(0).len(), 0);
         assert_eq!(badge_glyphs(7), vec![7]);
         assert_eq!(badge_glyphs(12), vec![9, 10]);
+    }
+
+    /// Both glyphs have to stay legible sharing one 16px bitmap.
+    /// `cargo test -- --nocapture menu_icons`
+    #[test]
+    fn menu_icons() {
+        for (label, dot, repo) in [
+            ("waiting + PR open", status_dot(Status::Waiting), Repo::PrOpen),
+            ("unread + branch", status_dot(Status::Unread), Repo::Branch),
+            ("idle + PR open (hollow, shared)", status_dot(Status::Idle), Repo::PrOpen),
+            ("idle, no repo", status_dot(Status::Idle), Repo::Nothing),
+        ] {
+            let buf = menu_icon_rgba(dot, repo);
+            println!("--- {label}");
+            for y in 0..DOT_SIZE {
+                let mut row = String::new();
+                for x in 0..DOT_SIZE {
+                    let i = ((y * DOT_SIZE + x) * 4) as usize;
+                    row.push(if buf[i + 3] == 0 { '.' } else { '#' });
+                }
+                println!("{row}");
+            }
+        }
     }
 
     /// Run with `cargo test -- --nocapture` to eyeball the four states.

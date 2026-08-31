@@ -118,10 +118,10 @@ fn build_menu(header: &str, rows: &[MenuRow]) -> Option<Menu> {
     menu.append(&PredefinedMenuItem::separator()).ok()?;
     for row in rows {
         // A menu item's icon is the only way to get colour into a native Win32 menu without
-        // owner-drawing every item.
-        let (color, filled) = row.dot;
+        // owner-drawing every item, and it gets one icon, so the status dot and the repository
+        // mark share it.
         let dot = tray_icon::menu::Icon::from_rgba(
-            icon::dot_rgba(color, filled),
+            icon::menu_icon_rgba(row.dot, row.repo),
             icon::DOT_SIZE,
             icon::DOT_SIZE,
         )
@@ -153,6 +153,7 @@ struct MenuRow {
     text: String,
     pid: u32,
     dot: ([u8; 4], bool),
+    repo: session::Repo,
 }
 
 impl MenuRow {
@@ -161,6 +162,7 @@ impl MenuRow {
             text: render::row(session, now_ms),
             pid: session.pid,
             dot: icon::status_dot(session.status),
+            repo: session.repo,
         }
     }
 }
