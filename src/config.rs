@@ -49,22 +49,6 @@ impl Sound {
         }
     }
 
-    /// Stable fragment used to build the menu item id.
-    pub fn key(self) -> &'static str {
-        match self {
-            Sound::None => "none",
-            Sound::Default => "default",
-            Sound::Notification => "notification",
-            Sound::Asterisk => "asterisk",
-            Sound::Exclamation => "exclamation",
-            Sound::Hand => "hand",
-            Sound::Question => "question",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Sound> {
-        Sound::ALL.into_iter().find(|s| s.key() == key)
-    }
 }
 
 /// Statuses that can be chosen as notification triggers, in menu order.

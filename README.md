@@ -36,8 +36,14 @@ asked to be told about, and repeat it on a schedule until you deal with it.
 └─────────────────────────────────────────────┘
 ```
 
-Everything is configured from **Settings** in the tray menu, and every change is written to disk
-the moment you click it, so nothing is lost on a reboot:
+Everything is configured from **Settings…** in the tray menu, which opens a panel that stays put
+while you work through it. Changes apply and are written to disk the moment you click them, so
+nothing is lost on a reboot. Tick boxes toggle; the `‹ value ›` rows step through their choices —
+click the row (or `›`) for the next value, `‹` for the previous. The panel closes when the pointer
+leaves it, or on Esc.
+
+Settings deliberately are not menu items: a Win32 menu closes on every click, so changing three
+things meant reopening the menu three times.
 
 | Setting | Default | Choices |
 | --- | --- | --- |
@@ -48,9 +54,9 @@ the moment you click it, so nothing is lost on a reboot:
 | Alert stays for | 8 seconds | until clicked, 5s, 8s, 15s, 30s |
 | Check sessions every | 1 second | 0.5s, 1s, 2s, 5s, 10s, 30s |
 
-Settings live in `%APPDATA%\claude-tray\config.json`. Picking a sound plays it, so you can hear
-what you are choosing, and **Test alert now** shows a sample alert without waiting for a session
-to block.
+Settings live in `%APPDATA%\claude-tray\config.json`, written with defaults on first run so there
+is something to hand-edit. Picking a sound plays it, so you can hear what you are choosing, and
+**Test alert now** shows a sample alert without waiting for a session to block.
 
 The alert repeats on the interval for as long as a session stays in a watched status. A session
 that *newly* enters one interrupts that schedule and alerts immediately, so a fresh permission
@@ -63,10 +69,11 @@ toast on purpose: a toast needs a registered AppUserModelID and a Start-menu sho
 Assist and the per-app notification switches can silently suppress it — the wrong behaviour for
 something whose whole job is to be seen.
 
-To see one without waiting for a session to block:
+To see either without going through the tray:
 
 ```powershell
 .\target\release\claude-tray.exe --demo-alert
+.\target\release\claude-tray.exe --demo-settings
 ```
 
 ## Where the data comes from

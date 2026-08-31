@@ -14,14 +14,13 @@ mod liveness;
 mod notify;
 mod render;
 mod session;
+mod settings;
 
 use std::ptr;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tray_icon::menu::{
-    CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
-};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, KillTimer, MSG, PostQuitMessage, SetTimer, TranslateMessage,
@@ -29,13 +28,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use alert::Alerter;
-use config::{Config, Sound};
+use config::Config;
 use notify::Popup;
 use session::{IconState, Registry, Session, Status};
+use settings::SettingsWindow;
 
 const EXIT_ID: &str = "claude-tray-exit";
-const TEST_ID: &str = "claude-tray-test-alert";
-const ENABLED_ID: &str = "claude-tray-notify-enabled";
+const SETTINGS_ID: &str = "claude-tray-settings";
 
 /// Menu clicks are delivered on this thread while `DispatchMessageW` runs, so the loop drains this
 /// queue immediately afterwards. A queue rather than direct mutation keeps the handler closure from
@@ -57,7 +56,7 @@ fn make_icon(state: IconState) -> Option<Icon> {
 struct Ui {
     tray: TrayIcon,
     icon_state: Option<IconState>,
-    /// Rendered rows plus the settings state, so the menu is rebuilt when either moves.
+    /// The rendered rows, so the menu is rebuilt only when they actually change.
     menu_signature: String,
     tooltip: String,
     /// The builder ships no menu, so the first apply has to install one even if it is empty.
@@ -75,14 +74,7 @@ impl Ui {
         }
     }
 
-    fn apply(
-        &mut self,
-        state: IconState,
-        header: String,
-        rows: Vec<String>,
-        tooltip: String,
-        config: &Config,
-    ) {
+    fn apply(&mut self, state: IconState, header: String, rows: Vec<String>, tooltip: String) {
         if self.icon_state != Some(state) {
             if let Some(icon) = make_icon(state) {
                 let _ = self.tray.set_icon(Some(icon));
@@ -96,9 +88,9 @@ impl Ui {
         }
 
         // Elapsed times change every tick, so rows are compared as rendered text.
-        let signature = format!("{header}|{rows:?}|{config:?}");
+        let signature = format!("{header}|{rows:?}");
         if !self.menu_installed || self.menu_signature != signature {
-            if let Some(menu) = build_menu(&header, &rows, config) {
+            if let Some(menu) = build_menu(&header, &rows) {
                 self.tray.set_menu(Some(Box::new(menu)));
                 self.menu_installed = true;
             }
@@ -107,102 +99,11 @@ impl Ui {
     }
 }
 
-/// Settings submenu. Every item writes the config to disk as soon as it is clicked, so nothing is
-/// lost to a reboot or a kill.
-fn build_settings(config: &Config) -> Option<Submenu> {
-    let settings = Submenu::new("Settings", true);
-
-    settings
-        .append(&CheckMenuItem::with_id(
-            ENABLED_ID,
-            "Show desktop alerts",
-            true,
-            config.notifications_enabled,
-            None,
-        ))
-        .ok()?;
-
-    let statuses = Submenu::new("Alert me about", true);
-    for status in config::NOTIFIABLE {
-        statuses
-            .append(&CheckMenuItem::with_id(
-                format!("notif.status.{}", status.key()),
-                status.menu_label(),
-                true,
-                config.notifies_on(status),
-                None,
-            ))
-            .ok()?;
-    }
-    settings.append(&statuses).ok()?;
-
-    let repeat = Submenu::new("Repeat alert", true);
-    for secs in config::REPEAT_CHOICES {
-        repeat
-            .append(&CheckMenuItem::with_id(
-                format!("notif.repeat.{secs}"),
-                config::repeat_label(secs),
-                true,
-                config.repeat_secs == secs,
-                None,
-            ))
-            .ok()?;
-    }
-    settings.append(&repeat).ok()?;
-
-    let sound = Submenu::new("Alert sound", true);
-    for choice in Sound::ALL {
-        sound
-            .append(&CheckMenuItem::with_id(
-                format!("notif.sound.{}", choice.key()),
-                choice.label(),
-                true,
-                config.sound == choice,
-                None,
-            ))
-            .ok()?;
-    }
-    settings.append(&sound).ok()?;
-
-    let duration = Submenu::new("Alert stays for", true);
-    for secs in config::POPUP_CHOICES {
-        duration
-            .append(&CheckMenuItem::with_id(
-                format!("notif.dur.{secs}"),
-                config::popup_label(secs),
-                true,
-                config.popup_secs == secs,
-                None,
-            ))
-            .ok()?;
-    }
-    settings.append(&duration).ok()?;
-
-    settings.append(&PredefinedMenuItem::separator()).ok()?;
-
-    let poll = Submenu::new("Check sessions every", true);
-    for ms in config::POLL_CHOICES {
-        poll.append(&CheckMenuItem::with_id(
-            format!("poll.{ms}"),
-            config::poll_label(ms),
-            true,
-            config.poll_ms == ms,
-            None,
-        ))
-        .ok()?;
-    }
-    settings.append(&poll).ok()?;
-
-    settings.append(&PredefinedMenuItem::separator()).ok()?;
-    settings
-        .append(&MenuItem::with_id(TEST_ID, "Test alert now", true, None))
-        .ok()?;
-
-    Some(settings)
-}
-
-/// Session rows are plain items: clicking one just dismisses the menu. Only settings and Exit act.
-fn build_menu(header: &str, rows: &[String], config: &Config) -> Option<Menu> {
+/// Session rows are plain items: clicking one just dismisses the menu. Only Settings and Exit act.
+///
+/// Settings deliberately open a window rather than living in submenus here: a Win32 menu closes on
+/// every click, so changing several settings meant reopening the menu once per change.
+fn build_menu(header: &str, rows: &[String]) -> Option<Menu> {
     let menu = Menu::new();
 
     menu.append(&MenuItem::new(header, false, None)).ok()?;
@@ -214,8 +115,8 @@ fn build_menu(header: &str, rows: &[String], config: &Config) -> Option<Menu> {
         menu.append(&PredefinedMenuItem::separator()).ok()?;
     }
 
-    let settings = build_settings(config)?;
-    menu.append(&settings as &dyn IsMenuItem).ok()?;
+    menu.append(&MenuItem::with_id(SETTINGS_ID, "Settings\u{2026}", true, None))
+        .ok()?;
     menu.append(&PredefinedMenuItem::separator()).ok()?;
     menu.append(&MenuItem::with_id(EXIT_ID, "Exit", true, None))
         .ok()?;
@@ -252,7 +153,6 @@ fn tick(
         render::header(&sessions),
         rows,
         render::tooltip(&sessions),
-        config,
     );
 
     let matching: Vec<&Session> = sessions
@@ -276,60 +176,20 @@ fn tick(
     }
 }
 
-/// Applies a settings click. Returns true when the poll timer has to be rebuilt.
-fn handle_menu_id(id: &str, config: &mut Config, alerter: &mut Alerter, popup: Option<&Popup>) -> bool {
-    let mut poll_changed = false;
-
-    if id == ENABLED_ID {
-        config.notifications_enabled = !config.notifications_enabled;
-        // Re-arm, so switching alerts back on tells you about anything already waiting.
-        alerter.reset();
-    } else if let Some(key) = id.strip_prefix("notif.status.") {
-        if let Some(status) = Status::from_key(key) {
-            config.toggle_status(status);
-            alerter.reset();
-        }
-    } else if let Some(secs) = id.strip_prefix("notif.repeat.") {
-        if let Ok(secs) = secs.parse::<u64>() {
-            config.repeat_secs = secs;
-        }
-    } else if let Some(key) = id.strip_prefix("notif.sound.") {
-        if let Some(sound) = Sound::from_key(key) {
-            config.sound = sound;
-            // Immediate feedback, so picking a sound lets you hear it.
-            notify::play(sound);
-        }
-    } else if let Some(secs) = id.strip_prefix("notif.dur.") {
-        if let Ok(secs) = secs.parse::<u64>() {
-            config.popup_secs = secs;
-        }
-    } else if let Some(ms) = id.strip_prefix("poll.") {
-        if let Ok(ms) = ms.parse::<u64>() {
-            config.poll_ms = ms;
-            poll_changed = true;
-        }
-    } else if id == TEST_ID {
-        if let Some(popup) = popup {
-            popup.show(
-                "Test alert",
-                &[
-                    "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt"
-                        .to_string(),
-                    "\u{25d0} claude-tray-97 \u{2014} BUSY 12s".to_string(),
-                ],
-                (0xE5, 0x48, 0x2F),
-                config.popup_secs,
-                config.sound,
-            );
-        }
-        // A test must not shift the real repeat schedule.
-        return false;
-    } else {
-        return false;
+/// A sample alert, so the look and sound can be checked without waiting for a session to block.
+fn show_test_alert(config: &Config, popup: Option<&Popup>) {
+    if let Some(popup) = popup {
+        popup.show(
+            "Test alert",
+            &[
+                "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt".to_string(),
+                "\u{25d0} claude-tray-97 \u{2014} BUSY 12s".to_string(),
+            ],
+            (0xE5, 0x48, 0x2F),
+            config.popup_secs,
+            config.sound,
+        );
     }
-
-    config.save();
-    poll_changed
 }
 
 /// `claude-tray.exe --demo-alert` shows one alert and exits. No tray icon, no registry polling —
@@ -370,9 +230,41 @@ fn demo_alert() {
     }
 }
 
+/// `claude-tray.exe --demo-settings` opens the settings panel on its own, for checking its look and
+/// behaviour without going through the tray. Changes are still saved.
+fn demo_settings() {
+    let mut config = Config::load();
+    let Some(settings) = SettingsWindow::new() else {
+        return;
+    };
+    settings.open(&config);
+
+    let mut msg: MSG = unsafe { std::mem::zeroed() };
+    loop {
+        let result = unsafe { GetMessageW(&mut msg, ptr::null_mut(), 0, 0) };
+        if result <= 0 {
+            break;
+        }
+        unsafe {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        if let Some(changes) = settings.take_changes()
+            && changes.config != config
+        {
+            config = changes.config;
+            config.save();
+        }
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--demo-alert") {
         demo_alert();
+        return;
+    }
+    if std::env::args().any(|a| a == "--demo-settings") {
+        demo_settings();
         return;
     }
 
@@ -402,8 +294,10 @@ fn main() {
         Err(_) => return,
     };
 
-    // Alerts are a nicety: if the window cannot be made, the tray still works.
+    // Alerts and the settings panel are niceties: if either window cannot be made, the tray still
+    // works without it.
     let popup = Popup::new();
+    let settings = SettingsWindow::new();
 
     let mut ui = Ui::new(tray);
     let now = now_ms();
@@ -412,7 +306,6 @@ fn main() {
         render::header(&sessions),
         sessions.iter().map(|s| render::row(s, now)).collect(),
         render::tooltip(&sessions),
-        &config,
     );
 
     MenuEvent::set_event_handler(Some(|event: MenuEvent| {
@@ -455,10 +348,29 @@ fn main() {
         for id in ids {
             if id == EXIT_ID {
                 unsafe { PostQuitMessage(0) };
-            } else {
-                poll_changed |= handle_menu_id(&id, &mut config, &mut alerter, popup.as_ref());
+            } else if id == SETTINGS_ID && let Some(settings) = settings.as_ref() {
+                settings.open(&config);
             }
         }
+
+        // The panel edits its own copy and hands back whatever moved, so settings apply the moment
+        // they are clicked while the panel stays open.
+        if let Some(settings) = settings.as_ref()
+            && let Some(changes) = settings.take_changes()
+        {
+            if changes.test_requested {
+                show_test_alert(&changes.config, popup.as_ref());
+            }
+            if changes.config != config {
+                // Re-arm, so a change to what counts as alertable reports anything already waiting
+                // rather than waiting out the current repeat interval.
+                alerter.reset();
+                config = changes.config;
+                config.save();
+                poll_changed |= changes.poll_changed;
+            }
+        }
+
         if poll_changed {
             if timer_id != 0 {
                 unsafe { KillTimer(ptr::null_mut(), timer_id) };

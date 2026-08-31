@@ -44,29 +44,7 @@ impl Status {
         }
     }
 
-    /// Stable fragment for menu item ids and the config file.
-    pub fn key(self) -> &'static str {
-        match self {
-            Status::Waiting => "waiting",
-            Status::Busy => "busy",
-            Status::Shell => "shell",
-            Status::Idle => "idle",
-            Status::Unknown => "unknown",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Status> {
-        match key {
-            "waiting" => Some(Status::Waiting),
-            "busy" => Some(Status::Busy),
-            "shell" => Some(Status::Shell),
-            "idle" => Some(Status::Idle),
-            "unknown" => Some(Status::Unknown),
-            _ => None,
-        }
-    }
-
-    /// Longer text for the settings menu, where `WAITING` alone reads as shouting.
+    /// Longer text for the settings panel, where `WAITING` alone reads as shouting.
     pub fn menu_label(self) -> &'static str {
         match self {
             Status::Waiting => "Waiting on you",
