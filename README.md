@@ -19,7 +19,8 @@ Cursor's store is opened read-only.
 | Tool | Source | What it can say |
 | --- | --- | --- |
 | Claude Code | the session registry, the transcript, and the desktop app's own record | waiting, busy, finished-unread, finished |
-| Cursor | `state.vscdb`, key `cloudAgentRepository.agents.*` | running, finished-unread, finished, failed |
+| Cursor cloud agents | `state.vscdb`, key `cloudAgentRepository.agents.*` | running, finished-unread, finished, failed |
+| Cursor local chats | `conversation-search.db`, `composerData:<id>`, and the local-agent project map | finished |
 
 Rows also carry a **repository mark** where the tool records one: a green arrow for an open pull
 request, purple for a merged one, and a purple fork for a branch that has no pull request yet. An
@@ -36,9 +37,20 @@ bitmap there — the dot a size down, the mark beside it. Menu rows also keep th
 (`· PR open`), which the alert does not need because it has room to draw the mark full size.
 
 Cursor's **cloud agents** carry a real status and an unread flag, so every row shows genuine state.
-Its local chats are deliberately not listed: they live in `conversation-search.db` with a title and
-a timestamp but no live state, and there are hundreds of them — they would bury the agents that are
-actually doing something.
+
+Its **local chats** take three sources to assemble, because no one of them is enough:
+
+- `conversation-search.db` lists them with a timestamp, but its titles lag — the newest chat is
+  usually in it with an empty title.
+- `composerData:<id>` in the key/value store holds the real title and how the chat ended
+  (`completed`, `aborted`, or `none`). None of those is live: Cursor never flushes a running
+  composer to disk, so a local chat only ever reads as finished.
+- `glass.localAgentProjects` with `glass.localAgentProjectMembership` maps each chat to a folder,
+  which is what names its row — the same grouping Cursor's own sidebar uses.
+
+They are limited to a recent window, a week by default, because there are hundreds of them and none
+of them reports a live state. Only the handful inside the window have their composer record read,
+so the large conversation blobs are touched a few at a time rather than in their hundreds.
 
 The Cursor status numbers are its own `aiserver.v1.BackgroundComposerStatus`, read out of the app's
 bundle rather than guessed:
@@ -115,6 +127,7 @@ things meant reopening the menu three times.
 | Check sessions every | 1 second | 0.5s, 1s, 2s, 5s, 10s, 30s |
 | Sort rows by | Attention first | attention first, most recent, oldest |
 | Alert shows at most | 4 rows | 3, 4, 5, 6, 8, 12, all of them |
+| Cursor local chats | Last week | cloud agents only, last day, 3 days, week, month, 90 days |
 
 **Attention first** puts what needs you at the top and, within a state, whatever has been stuck
 longest. **Most recent** and **oldest** ignore state and go purely by last activity. The order

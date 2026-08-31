@@ -73,6 +73,7 @@ fn wide(text: &str) -> Vec<u16> {
 enum Field {
     Sort,
     Rows,
+    CursorLocal,
     Repeat,
     Sound,
     Popup,
@@ -193,6 +194,15 @@ fn layout(config: &Config) -> Vec<Row> {
         Some(Action::Cycle(Field::Rows, 1)),
         &mut y,
     );
+    push(
+        RowKind::Cycle {
+            label: "Cursor local chats".to_string(),
+            value: config::cursor_local_label(config.cursor_local_days),
+        },
+        ROW_H,
+        Some(Action::Cycle(Field::CursorLocal, 1)),
+        &mut y,
+    );
 
     push(
         RowKind::Section("Timing and sound".to_string()),
@@ -263,6 +273,10 @@ fn apply(action: Action, config: &mut Config) -> bool {
         Action::Cycle(Field::Sort, dir) => config.sort = cycle(&Sort::ALL, config.sort, dir),
         Action::Cycle(Field::Rows, dir) => {
             config.max_alert_rows = cycle(&config::ROW_CHOICES, config.max_alert_rows, dir)
+        }
+        Action::Cycle(Field::CursorLocal, dir) => {
+            config.cursor_local_days =
+                cycle(&config::CURSOR_LOCAL_CHOICES, config.cursor_local_days, dir)
         }
         Action::Cycle(Field::Repeat, dir) => {
             config.repeat_secs = cycle(&config::REPEAT_CHOICES, config.repeat_secs, dir)

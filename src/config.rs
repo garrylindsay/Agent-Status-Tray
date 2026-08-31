@@ -95,6 +95,19 @@ pub const POLL_CHOICES: [u64; 6] = [500, 1_000, 2_000, 5_000, 10_000, 30_000];
 /// How long a popup stays on screen, in seconds. `0` means "stay until clicked".
 pub const POPUP_CHOICES: [u64; 5] = [0, 5, 8, 15, 30];
 
+/// How far back local Cursor chats are listed, in days. `0` leaves them out.
+pub const CURSOR_LOCAL_CHOICES: [u64; 6] = [0, 1, 3, 7, 30, 90];
+
+pub fn cursor_local_label(days: u64) -> String {
+    match days {
+        0 => "Cloud agents only".to_string(),
+        1 => "Last day".to_string(),
+        7 => "Last week".to_string(),
+        30 => "Last month".to_string(),
+        n => format!("Last {n} days"),
+    }
+}
+
 /// Rows an alert will show before collapsing the rest into "+N more". `0` means every one.
 pub const ROW_CHOICES: [u64; 7] = [3, 4, 5, 6, 8, 12, 0];
 
@@ -124,6 +137,8 @@ pub struct Config {
     pub sort: Sort,
     /// Rows an alert shows before the rest collapse into "+N more". `0` shows every one.
     pub max_alert_rows: u64,
+    /// How far back local Cursor chats are listed, in days. `0` lists only cloud agents.
+    pub cursor_local_days: u64,
 }
 
 impl Default for Config {
@@ -137,6 +152,7 @@ impl Default for Config {
             popup_secs: 8,
             sort: Sort::Attention,
             max_alert_rows: 4,
+            cursor_local_days: 7,
         }
     }
 }
@@ -167,6 +183,10 @@ impl Config {
         // An alert taller than the screen helps nobody, and zero means "all" rather than "none".
         if self.max_alert_rows != 0 {
             self.max_alert_rows = self.max_alert_rows.clamp(1, 40);
+        }
+        // Local chats have no live state, so a long window is all cost and no news.
+        if self.cursor_local_days != 0 {
+            self.cursor_local_days = self.cursor_local_days.clamp(1, 365);
         }
         self.notify_statuses.retain(|s| NOTIFIABLE.contains(s));
         self.notify_statuses.dedup();

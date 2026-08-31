@@ -189,7 +189,7 @@ impl Sources {
     }
 
     /// Every provider's sessions, in one list, in the order the settings ask for.
-    fn collect(&mut self, now_ms: u64, sort: Sort) -> Vec<Session> {
+    fn collect(&mut self, now_ms: u64, config: &Config) -> Vec<Session> {
         // Claude Code: the registry says which sessions exist, the transcript supplies the title,
         // and the desktop record supplies the state the registry no longer reports.
         let mut sessions = self.registry.scan();
@@ -203,11 +203,11 @@ impl Sources {
         let live: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
         self.titles.retain(&live);
 
-        sessions.extend(self.cursor.sessions(now_ms));
+        sessions.extend(self.cursor.sessions(now_ms, config.cursor_local_days));
 
         // Sorted across providers, not within each: a failed Cursor agent outranks an idle Claude
         // session. Ties break on pid so the order cannot shuffle between ticks.
-        match sort {
+        match config.sort {
             Sort::Attention => sessions.sort_by(|a, b| {
                 a.status
                     .rank()
@@ -304,7 +304,7 @@ fn tick(
     // Cheap, and guarded against re-flushing, so the menu follows a theme switched mid-run.
     theme::sync_menu_theme();
     let now = now_ms();
-    let sessions = sources.collect(now, config.sort);
+    let sessions = sources.collect(now, config);
     let rows: Vec<MenuRow> = sessions.iter().map(|s| MenuRow::new(s, now)).collect();
 
     ui.apply(
@@ -364,7 +364,7 @@ fn demo_alert() {
 
     // Prefer the sessions actually running, so clicking a row really does jump to one.
     let now = now_ms();
-    let mut sessions = Sources::new().collect(now, config.sort);
+    let mut sessions = Sources::new().collect(now, &config);
     if sessions.is_empty() {
         sessions = sample_sessions(now);
     }
@@ -451,7 +451,7 @@ fn main() {
 
     let mut alerter = Alerter::new();
     let mut sources = Sources::new();
-    let sessions = sources.collect(now_ms(), config.sort);
+    let sessions = sources.collect(now_ms(), &config);
     let state = session::icon_state(&sessions);
 
     // Right-click opens the menu, as every other tray icon does. Left-click is deliberately left

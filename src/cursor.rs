@@ -5,12 +5,18 @@
 //! `cloudAgentRepository.agents.`. The value is a JSON array of agent records carrying a status, an
 //! unread flag, and last-activity time — the same three things this tray wants.
 //!
-//! Only cloud agents are read. Cursor's local chats live in `conversation-search.db` and carry a
-//! title and a timestamp but no live state, so listing them would bury the agents that are
-//! actually doing something behind hundreds of rows that can never say anything.
+//! Local chats are read too, when the settings ask for them. They take three sources to assemble:
+//! `conversation-search.db` lists them with a timestamp, `composerData:<id>` in the key/value
+//! store holds the real title and how the chat ended, and `glass.localAgentProjects` with
+//! `glass.localAgentProjectMembership` says which folder each belongs to. The search index alone
+//! is not enough — it lags, and the newest chat is usually in it with an empty title.
 //!
-//! The store is opened read-only and never written to.
+//! They are limited to a recent window because there are hundreds of them, and none reports a live
+//! state: a local chat is only ever finished.
+//!
+//! Every store is opened read-only and never written to.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -146,9 +152,143 @@ fn read_agents(path: &Path) -> Vec<Agent> {
     agents
 }
 
+/// A local chat, as `composerData:<id>` records it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Composer {
+    name: Option<String>,
+    status: Option<String>,
+    last_updated_at: Option<u64>,
+}
+
+impl Composer {
+    /// `completed` and `aborted` are both endings; `none` is a chat that never ran. None of them
+    /// is live — Cursor does not flush a running composer's state to disk.
+    fn status(&self) -> Status {
+        match self.status.as_deref() {
+            Some("completed") | Some("aborted") => Status::Idle,
+            _ => Status::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Project {
+    id: String,
+    workspace: Option<Workspace>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Workspace {
+    uri: Option<Uri>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Uri {
+    #[serde(rename = "fsPath")]
+    fs_path: Option<String>,
+}
+
+/// Folder leaf for a path, which is what a row shows as its name.
+fn folder_leaf(path: &str) -> Option<String> {
+    let leaf = path.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next()?;
+    (!leaf.trim().is_empty()).then(|| leaf.to_string())
+}
+
+/// One value out of the key/value table.
+fn item(connection: &rusqlite::Connection, key: &str) -> Option<String> {
+    connection
+        .query_row("select value from ItemTable where key = ?1", [key], |row| {
+            row.get::<_, String>(0)
+        })
+        .ok()
+}
+
+/// Maps every local chat to the folder it belongs to.
+fn folders_by_conversation(connection: &rusqlite::Connection) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+
+    let Some(projects) = item(connection, "glass.localAgentProjects.v1") else {
+        return out;
+    };
+    let Ok(projects) = serde_json::from_str::<Vec<Project>>(&projects) else {
+        return out;
+    };
+    let folders: HashMap<String, String> = projects
+        .into_iter()
+        .filter_map(|p| {
+            let path = p.workspace?.uri?.fs_path?;
+            Some((p.id, folder_leaf(&path)?))
+        })
+        .collect();
+
+    let Some(membership) = item(connection, "glass.localAgentProjectMembership.v1") else {
+        return out;
+    };
+    let Ok(membership) = serde_json::from_str::<HashMap<String, String>>(&membership) else {
+        return out;
+    };
+    for (conversation, project) in membership {
+        if let Some(folder) = folders.get(&project) {
+            out.insert(conversation, folder.clone());
+        }
+    }
+    out
+}
+
+/// Local chats touched within `days`.
+///
+/// The window is what keeps this honest: there are hundreds of these, none of them says anything
+/// about a live state, and a list of every chat ever would bury the agents that do.
+fn read_local(state: &rusqlite::Connection, days: u64, now_ms: u64) -> Vec<(String, Composer)> {
+    let Some(dir) = store_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) else {
+        return Vec::new();
+    };
+    let search = dir.join("conversation-search.db");
+    let uri = format!(
+        "file:{}?mode=ro",
+        search.to_string_lossy().replace('\\', "/")
+    );
+    let Ok(index) = rusqlite::Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) else {
+        return Vec::new();
+    };
+
+    let cutoff = now_ms.saturating_sub(days.saturating_mul(86_400_000));
+    let Ok(mut statement) = index.prepare(
+        "select id from conversations where source = 'local' and is_archived = 0 \
+         and updated_at >= ?1 order by updated_at desc limit 60",
+    ) else {
+        return Vec::new();
+    };
+    let Ok(rows) = statement.query_map([cutoff as i64], |row| row.get::<_, String>(0)) else {
+        return Vec::new();
+    };
+
+    // Only the handful inside the window are looked up, so the big conversation blobs are read
+    // a few at a time rather than in their hundreds.
+    rows.flatten()
+        .filter_map(|id| {
+            let value = state
+                .query_row(
+                    "select value from cursorDiskKV where key = ?1",
+                    [format!("composerData:{id}")],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()?;
+            let composer = serde_json::from_str::<Composer>(&value).ok()?;
+            Some((id, composer))
+        })
+        .collect()
+}
+
 #[derive(Default)]
 pub struct Cursor {
     scanned_at: u64,
+    /// Window the cache was built for, so changing the setting takes effect at once.
+    local_days: u64,
     cached: Vec<Session>,
     /// Cursor process with a window, so clicking a row can raise the app.
     window_pid: u32,
@@ -159,12 +299,17 @@ impl Cursor {
         Cursor::default()
     }
 
-    /// Cloud agents as sessions, rescanned at most every few seconds.
-    pub fn sessions(&mut self, now_ms: u64) -> Vec<Session> {
-        if self.scanned_at != 0 && now_ms.saturating_sub(self.scanned_at) < MIN_RESCAN_MS {
+    /// Cursor's sessions, rescanned at most every few seconds. `local_days` of 0 leaves local
+    /// chats out and lists only cloud agents.
+    pub fn sessions(&mut self, now_ms: u64, local_days: u64) -> Vec<Session> {
+        if self.scanned_at != 0
+            && self.local_days == local_days
+            && now_ms.saturating_sub(self.scanned_at) < MIN_RESCAN_MS
+        {
             return self.cached.clone();
         }
         self.scanned_at = now_ms;
+        self.local_days = local_days;
 
         let Some(path) = store_path() else {
             self.cached = Vec::new();
@@ -198,7 +343,49 @@ impl Cursor {
                 since: agent.since(),
             })
             .collect();
+
+        if local_days > 0 {
+            self.cached.extend(self.local(&path, local_days, now_ms));
+        }
         self.cached.clone()
+    }
+
+    /// Local chats as sessions. Their folder is their name, exactly as Cursor groups them.
+    fn local(&self, path: &Path, days: u64, now_ms: u64) -> Vec<Session> {
+        let uri = format!("file:{}?mode=ro", path.to_string_lossy().replace('\\', "/"));
+        let Ok(state) = rusqlite::Connection::open_with_flags(
+            &uri,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        ) else {
+            return Vec::new();
+        };
+
+        let folders = folders_by_conversation(&state);
+        read_local(&state, days, now_ms)
+            .into_iter()
+            .map(|(id, composer)| Session {
+                provider: Provider::Cursor,
+                pid: self.window_pid,
+                // Cursor groups these by folder, so the folder is what names the row.
+                name: folders.get(&id).cloned().unwrap_or_else(|| "cursor".to_string()),
+                cwd: String::new(),
+                // The search index lags and often has no title for the newest chat; the composer
+                // record has the real one.
+                title: composer
+                    .name
+                    .clone()
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty()),
+                session_id: Some(id),
+                entrypoint: None,
+                desktop_session_id: None,
+                // Cursor records no branch or pull request against a local chat.
+                repo: crate::session::Repo::Nothing,
+                status: composer.status(),
+                waiting_for: None,
+                since: composer.last_updated_at.unwrap_or(0),
+            })
+            .collect()
     }
 }
 
@@ -268,6 +455,27 @@ mod tests {
         let mut a = agent(1, false);
         a.last_message_activity_at_ms = None;
         assert_eq!(a.since(), 500);
+    }
+
+    /// `completed` and `aborted` are endings; a local chat is never live.
+    #[test]
+    fn local_chat_status_is_only_ever_finished() {
+        let ended = |s: &str| Composer {
+            name: None,
+            status: Some(s.to_string()),
+            last_updated_at: None,
+        }
+        .status();
+        assert_eq!(ended("completed"), Status::Idle);
+        assert_eq!(ended("aborted"), Status::Idle);
+        assert_eq!(ended("none"), Status::Unknown);
+    }
+
+    #[test]
+    fn folder_leaf_names_the_row() {
+        assert_eq!(folder_leaf(r"c:\git\scale-fun-der").as_deref(), Some("scale-fun-der"));
+        assert_eq!(folder_leaf("/home/x/repo/").as_deref(), Some("repo"));
+        assert_eq!(folder_leaf(""), None);
     }
 
     /// Reads this machine's real Cursor store.
