@@ -15,9 +15,14 @@ tray icon:  ( 2 )   red disc   -> 2 sessions waiting on you
             ( 4 )   gray ring  -> 4 sessions, all idle
 ```
 
-Click the icon for the session list. Rows are sorted attention-first (waiting → busy → idle), then
-oldest-first within a status, so the session that has been stuck longest is always at the top — as
-below, where a permission prompt pulls `api-gateway-f6` to the top of the list.
+Click the icon for the session list. Each row carries a color chip of its own, so a session stays
+recognizable as its status changes and the list re-sorts around it — the chip says *which* session,
+the glyph and label say what it is doing. A session keeps its color across a resume, and two
+sessions running in the same repo still get different colors.
+
+Rows are sorted attention-first (waiting → busy → idle), then oldest-first within a status, so the
+session that has been stuck longest is always at the top — as below, where a permission prompt pulls
+`api-gateway-f6` to the top of the list.
 
 <img src="docs/demo.gif" width="900"
   alt="The tray icon changing from a gray ring to blue to red as sessions start working and then block on a permission prompt, while the menu re-sorts the blocked session to the top">
@@ -76,3 +81,7 @@ $s.Save()
 - Menu rows use the system menu font, which is proportional, so columns are separated with `—` and
   `·` rather than aligned with padding.
 - Windows caps tray tooltips at 128 characters; the hover text is a summary, not the full list.
+- The color is a chip rather than colored row text: Windows will not tint menu text without
+  owner-drawing the whole menu.
+- Chips are a fixed 16x16 bitmap and do not scale with display DPI, so they look small above 100%.
+- There are twelve colors. A thirteenth concurrent session reuses one.

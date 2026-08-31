@@ -66,6 +66,7 @@ impl Status {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Raw {
+    session_id: Option<String>,
     cwd: String,
     name: Option<String>,
     status: String,
@@ -78,6 +79,8 @@ struct Raw {
 #[derive(Debug, Clone)]
 pub struct Session {
     pub pid: u32,
+    /// Stable identity for coloring: survives a resume, unlike `pid`.
+    pub key: String,
     pub name: String,
     pub status: Status,
     pub waiting_for: Option<String>,
@@ -122,6 +125,28 @@ fn display_name(pid: u32, raw: &Raw) -> String {
     } else {
         leaf.to_string()
     }
+}
+
+/// Identity a session keeps across restarts of this program and across its own resume.
+///
+/// `sessionId` is preferred over `cwd` deliberately: two Claude sessions in one repo is
+/// ordinary, and keying on the directory would hand them the same color - the exact
+/// confusion the color is there to remove. `pid` is the last resort because it changes
+/// every time a session restarts.
+fn color_key(pid: u32, raw: &Raw) -> String {
+    if let Some(id) = raw
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        return id.to_string();
+    }
+    let cwd = raw.cwd.trim();
+    if !cwd.is_empty() {
+        return cwd.to_string();
+    }
+    format!("pid {pid}")
 }
 
 /// Reader for the session registry.
@@ -189,6 +214,7 @@ impl Registry {
 
             sessions.push(Session {
                 pid,
+                key: color_key(pid, &raw),
                 name: display_name(pid, &raw),
                 status: Status::parse(&raw.status),
                 waiting_for: raw
@@ -273,6 +299,29 @@ mod tests {
         assert!(!liveness::is_claude_process(std::process::id()));
     }
 
+    #[test]
+    fn color_key_prefers_session_id_then_cwd_then_pid() {
+        let with_id = Raw {
+            session_id: Some("cec93284-fc80-46ff-ba67-c4e788d70998".to_string()),
+            cwd: r"C:\repos\x".to_string(),
+            ..Raw::default()
+        };
+        assert_eq!(color_key(7, &with_id), "cec93284-fc80-46ff-ba67-c4e788d70998");
+
+        let with_cwd = Raw {
+            cwd: r"C:\repos\x".to_string(),
+            ..Raw::default()
+        };
+        assert_eq!(color_key(7, &with_cwd), r"C:\repos\x");
+
+        // Blank strings are not identities.
+        let blank = Raw {
+            session_id: Some("  ".to_string()),
+            ..Raw::default()
+        };
+        assert_eq!(color_key(7, &blank), "pid 7");
+    }
+
     /// Prints what the tray would show for the sessions running right now.
     /// `cargo test -- --nocapture live_registry`
     #[test]
@@ -281,8 +330,8 @@ mod tests {
         println!("{:?}", sessions_dir());
         for s in &sessions {
             println!(
-                "pid={} status={:?} waiting_for={:?} name={}",
-                s.pid, s.status, s.waiting_for, s.name
+                "pid={} status={:?} waiting_for={:?} name={} key={}",
+                s.pid, s.status, s.waiting_for, s.name, s.key
             );
         }
         println!("icon: {:?}", icon_state(&sessions));

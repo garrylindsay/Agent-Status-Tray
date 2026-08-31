@@ -2,26 +2,33 @@
 //!
 //! Claude Code keeps a live registry at `%USERPROFILE%\.claude\sessions\<pid>.json`. This polls it
 //! once a second, paints the aggregate state onto the tray icon, and lists each session in the
-//! tray menu. Display only — nothing here talks back to Claude Code.
+//! tray menu, each row tagged with a color of its own. Display only — nothing here talks back to
+//! Claude Code.
 
 #![windows_subsystem = "windows"]
 
+mod color;
 mod icon;
 mod liveness;
+mod menu_gdi;
 mod render;
 mod session;
 
+use std::collections::HashMap;
 use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{
+    Icon as MenuIcon, IconMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem,
+};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, KillTimer, MSG, PostQuitMessage, SetTimer, TranslateMessage,
     WM_TIMER,
 };
 
-use session::{IconState, Registry};
+use color::ColorMap;
+use session::{IconState, Registry, Session};
 
 const TICK_MS: u32 = 1_000;
 const EXIT_ID: &str = "claude-tray-exit";
@@ -37,14 +44,38 @@ fn make_icon(state: IconState) -> Option<Icon> {
     Icon::from_rgba(icon::render(state), icon::WIDTH, icon::HEIGHT).ok()
 }
 
+/// One session as the menu needs it: what to draw, and what it is drawn for.
+struct Row {
+    key: String,
+    color: usize,
+    text: String,
+}
+
+fn rows_for(sessions: &[Session], colors: &mut ColorMap, now: u64) -> Vec<Row> {
+    sessions
+        .iter()
+        .map(|session| Row {
+            key: session.key.clone(),
+            color: colors.index_for(&session.key),
+            text: render::row(session, now),
+        })
+        .collect()
+}
+
 /// What is currently on screen, so ticks that change nothing touch nothing.
 struct Ui {
     tray: TrayIcon,
     icon_state: Option<IconState>,
-    rows: Vec<String>,
     tooltip: String,
-    /// The builder ships no menu, so the first apply has to install one even if it is empty.
-    menu_installed: bool,
+    /// Held alongside the copy given to the tray, so its bitmaps can be freed on replacement.
+    menu: Option<Menu>,
+    /// The session rows of `menu`, in order, so their text can be retargeted in place.
+    items: Vec<IconMenuItem>,
+    texts: Vec<String>,
+    /// `(session key, palette slot)` per row. The menu is rebuilt only when this changes.
+    roster: Vec<(String, usize)>,
+    /// Rasterized once per palette slot, since the pixels of a chip never change.
+    swatches: HashMap<usize, MenuIcon>,
 }
 
 impl Ui {
@@ -52,13 +83,26 @@ impl Ui {
         Ui {
             tray,
             icon_state: None,
-            rows: Vec::new(),
             tooltip: String::new(),
-            menu_installed: false,
+            menu: None,
+            items: Vec::new(),
+            texts: Vec::new(),
+            roster: Vec::new(),
+            swatches: HashMap::new(),
         }
     }
 
-    fn apply(&mut self, state: IconState, header: String, rows: Vec<String>, tooltip: String) {
+    fn swatch(&mut self, slot: usize) -> Option<MenuIcon> {
+        if let Some(existing) = self.swatches.get(&slot) {
+            return Some(existing.clone());
+        }
+        let pixels = icon::swatch(color::PALETTE[slot]);
+        let built = MenuIcon::from_rgba(pixels, icon::SWATCH_SIZE, icon::SWATCH_SIZE).ok()?;
+        self.swatches.insert(slot, built.clone());
+        Some(built)
+    }
+
+    fn apply(&mut self, state: IconState, header: String, rows: Vec<Row>, tooltip: String) {
         if self.icon_state != Some(state) {
             if let Some(icon) = make_icon(state) {
                 let _ = self.tray.set_icon(Some(icon));
@@ -71,49 +115,86 @@ impl Ui {
             self.tooltip = tooltip;
         }
 
-        // Elapsed times change every tick, so rows are compared as rendered text.
-        if !self.menu_installed || self.rows != rows {
-            if let Some(menu) = build_menu(&header, &rows) {
-                self.tray.set_menu(Some(Box::new(menu)));
-                self.menu_installed = true;
+        let roster: Vec<(String, usize)> = rows.iter().map(|r| (r.key.clone(), r.color)).collect();
+
+        // Elapsed times move every tick. Retargeting the text costs nothing, where rebuilding
+        // the menu allocates a GDI bitmap per row that muda never frees.
+        if self.menu.is_some() && self.roster == roster {
+            for (index, row) in rows.iter().enumerate() {
+                if self.texts[index] != row.text {
+                    self.items[index].set_text(&row.text);
+                    self.texts[index] = row.text.clone();
+                }
             }
-            self.rows = rows;
+            return;
         }
+
+        self.rebuild(&header, rows);
+        self.roster = roster;
+    }
+
+    /// Build a fresh menu, hand it to the tray, then reclaim what the outgoing one held.
+    fn rebuild(&mut self, header: &str, rows: Vec<Row>) {
+        let menu = Menu::new();
+        let mut items = Vec::with_capacity(rows.len());
+        let mut texts = Vec::with_capacity(rows.len());
+
+        if menu.append(&MenuItem::new(header, false, None)).is_err()
+            || menu.append(&PredefinedMenuItem::separator()).is_err()
+        {
+            return;
+        }
+
+        for row in rows {
+            let swatch = self.swatch(row.color);
+            let item = IconMenuItem::new(&row.text, true, swatch, None);
+            if menu.append(&item).is_err() {
+                return;
+            }
+            items.push(item);
+            texts.push(row.text);
+        }
+
+        if !items.is_empty() && menu.append(&PredefinedMenuItem::separator()).is_err() {
+            return;
+        }
+        if menu
+            .append(&MenuItem::with_id(EXIT_ID, "Exit", true, None))
+            .is_err()
+        {
+            return;
+        }
+
+        self.tray.set_menu(Some(Box::new(menu.clone())));
+
+        // Only after the replacement is installed, so no bitmap still on screen is freed.
+        if let Some(old) = self.menu.take() {
+            menu_gdi::free_item_bitmaps(&old);
+        }
+
+        self.menu = Some(menu);
+        self.items = items;
+        self.texts = texts;
     }
 }
 
-/// Session rows are plain items: clicking one just dismisses the menu. Only Exit acts.
-fn build_menu(header: &str, rows: &[String]) -> Option<Menu> {
-    let menu = Menu::new();
-
-    menu.append(&MenuItem::new(header, false, None)).ok()?;
-    menu.append(&PredefinedMenuItem::separator()).ok()?;
-    for row in rows {
-        menu.append(&MenuItem::new(row, true, None)).ok()?;
-    }
-    if !rows.is_empty() {
-        menu.append(&PredefinedMenuItem::separator()).ok()?;
-    }
-    menu.append(&MenuItem::with_id(EXIT_ID, "Exit", true, None))
-        .ok()?;
-    Some(menu)
-}
-
-fn tick(registry: &mut Registry, ui: &mut Ui) {
+fn tick(registry: &mut Registry, colors: &mut ColorMap, ui: &mut Ui) {
     let sessions = registry.scan();
-    let now = now_ms();
-    let rows: Vec<String> = sessions.iter().map(|s| render::row(s, now)).collect();
+    // Free the slots of departed sessions before handing colors to this tick's rows.
+    colors.retain_live(&sessions);
 
+    let now = now_ms();
     ui.apply(
         session::icon_state(&sessions),
         render::header(&sessions),
-        rows,
+        rows_for(&sessions, colors, now),
         render::tooltip(&sessions),
     );
 }
 
 fn main() {
     let mut registry = Registry::new();
+    let mut colors = ColorMap::new();
     let sessions = registry.scan();
     let state = session::icon_state(&sessions);
 
@@ -135,7 +216,7 @@ fn main() {
     ui.apply(
         state,
         render::header(&sessions),
-        sessions.iter().map(|s| render::row(s, now)).collect(),
+        rows_for(&sessions, &mut colors, now),
         render::tooltip(&sessions),
     );
 
@@ -159,7 +240,7 @@ fn main() {
         // Timer messages are posted with a null hwnd, so they are handled here rather than
         // dispatched to a window procedure.
         if timer_id != 0 && msg.message == WM_TIMER && msg.wParam == timer_id {
-            tick(&mut registry, &mut ui);
+            tick(&mut registry, &mut colors, &mut ui);
         }
         unsafe {
             TranslateMessage(&msg);

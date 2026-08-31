@@ -33,6 +33,8 @@
   .sep { height: 1px; background: #3D3D3D; margin: 4px 11px; }
   .row { color: #F0F0F0; }
   .row.hot { background: #383838; }
+  /* Session color chip. Geometry and colors mirror icon::swatch / color::PALETTE. */
+  .chip { width: 14px; height: 14px; flex: none; margin-right: 11px; box-sizing: border-box; }
   .dot { width: 24px; flex: none; font-size: 15px; line-height: 1; }
   .w .dot { color: #E5482F; } .b .dot { color: #2E8BE0; } .i .dot { color: #9AA0AA; }
   .i .txt { color: #9AA0AA; }
@@ -149,12 +151,24 @@ function tooltip(rows) {
 
 var GLYPH = { w: '●', b: '◐', i: '○' };
 
+// Chip per session, keyed by name so the color follows a session as the rows re-sort -
+// what src/color.rs ColorMap does with the session id. Fill and darkened border mirror
+// color::PALETTE and icon::swatch.
+var CHIP = {
+  'api-gateway-f6':     ['#DB5F52', '#A4473D'],
+  'web-app-16':         ['#4C8DD9', '#3969A2'],
+  'billing-service-b4': ['#3FA796', '#2F7D70'],
+  'index-perf-test':    ['#D1A32B', '#9C7A20']
+};
+
 function draw(f) {
   document.getElementById('icon').innerHTML = iconSvg(f.k, f.c);
   document.getElementById('tip').textContent = tooltip(f.rows);
   var rows = f.rows.map(function (r) {
     var g = r[0], name = r[1], label = r[2], age = r[3], why = r[4];
     return '<div class="item row ' + g + (g === 'w' ? ' hot' : '') + '">' +
+           '<span class="chip" style="background:' + CHIP[name][0] +
+           ';border:1px solid ' + CHIP[name][1] + '"></span>' +
            '<span class="dot">' + GLYPH[g] + '</span><span class="txt">' +
            name + ' — ' + label + ' ' + elapsed(age) +
            (why ? ' · ' + why : '') + '</span></div>';

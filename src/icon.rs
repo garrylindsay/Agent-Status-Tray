@@ -31,7 +31,7 @@ const FONT: [[u8; GLYPH_H as usize]; 11] = [
     [0b000, 0b010, 0b111, 0b010, 0b000], // +
 ];
 
-type Rgba = [u8; 4];
+pub type Rgba = [u8; 4];
 
 /// Disc color, glyph color.
 fn palette(kind: IconKind) -> (Rgba, Rgba) {
@@ -150,6 +150,42 @@ fn draw_badge(buf: &mut [u8], glyphs: &[usize], color: Rgba) {
     }
 }
 
+/// Side of the color chip drawn beside a menu row.
+///
+/// muda blits menu bitmaps at a hardcoded 16x16 and does not scale them for DPI, so this
+/// is not a free choice.
+pub const SWATCH_SIZE: u32 = 16;
+
+/// A solid color chip identifying one session.
+///
+/// Every pixel is opaque on purpose. muda draws the bitmap with `DrawIconEx(DI_NORMAL)`
+/// onto a zeroed DIB section, so anything translucent composites against black instead of
+/// the menu background - an antialiased shape would come out ringed in black. The border
+/// is the same color darkened, which gives the chip an edge on light and dark menus alike.
+pub fn swatch(color: Rgba) -> Vec<u8> {
+    let edge = darken(color, 0.75);
+    let mut buf = vec![0u8; (SWATCH_SIZE * SWATCH_SIZE * 4) as usize];
+
+    for y in 0..SWATCH_SIZE {
+        for x in 0..SWATCH_SIZE {
+            let on_edge = x == 0 || y == 0 || x == SWATCH_SIZE - 1 || y == SWATCH_SIZE - 1;
+            let idx = ((y * SWATCH_SIZE + x) * 4) as usize;
+            buf[idx..idx + 4].copy_from_slice(if on_edge { &edge } else { &color });
+        }
+    }
+
+    buf
+}
+
+fn darken(color: Rgba, factor: f32) -> Rgba {
+    [
+        (color[0] as f32 * factor) as u8,
+        (color[1] as f32 * factor) as u8,
+        (color[2] as f32 * factor) as u8,
+        0xFF,
+    ]
+}
+
 pub const WIDTH: u32 = SIZE;
 pub const HEIGHT: u32 = SIZE;
 
@@ -203,6 +239,48 @@ mod tests {
             ("empty", IconKind::Empty, 0),
         ] {
             println!("--- {label}\n{}", ascii(IconState { kind, count }));
+        }
+    }
+
+    #[test]
+    fn swatch_is_rgba8_of_the_declared_size() {
+        assert_eq!(
+            swatch(crate::color::PALETTE[0]).len(),
+            (SWATCH_SIZE * SWATCH_SIZE * 4) as usize
+        );
+    }
+
+    /// Guards the black-halo failure mode: muda composites menu bitmaps onto black, so a
+    /// chip with any translucent pixel gets a dark fringe in the menu.
+    #[test]
+    fn every_swatch_pixel_is_opaque() {
+        for color in crate::color::PALETTE {
+            let buf = swatch(color);
+            assert!(
+                buf.chunks_exact(4).all(|px| px[3] == 0xFF),
+                "translucent pixel in swatch for {color:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn swatch_border_is_darker_than_its_fill() {
+        let color = crate::color::PALETTE[0];
+        let buf = swatch(color);
+        let corner = &buf[0..4];
+        let middle_idx = ((SWATCH_SIZE / 2 * SWATCH_SIZE + SWATCH_SIZE / 2) * 4) as usize;
+        assert_eq!(&buf[middle_idx..middle_idx + 4], &color);
+        assert!(corner[0] < color[0] && corner[1] < color[1] && corner[2] < color[2]);
+    }
+
+    /// `cargo test -- --nocapture swatch_preview` to eyeball the chips.
+    #[test]
+    fn swatch_preview() {
+        for (i, color) in crate::color::PALETTE.iter().enumerate() {
+            let buf = swatch(*color);
+            let edge = &buf[0..4];
+            println!("slot {i:2} fill #{:02X}{:02X}{:02X} edge #{:02X}{:02X}{:02X}",
+                color[0], color[1], color[2], edge[0], edge[1], edge[2]);
         }
     }
 }

@@ -117,6 +117,7 @@ mod tests {
     fn ampersands_are_escaped_for_menus() {
         let session = Session {
             pid: 1,
+            key: "r&d-tool".to_string(),
             name: "r&d-tool".to_string(),
             status: Status::Idle,
             waiting_for: None,

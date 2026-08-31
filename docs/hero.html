@@ -47,6 +47,8 @@
   .sep { height: 1px; background: #3D3D3D; margin: 5px 12px; }
   .row { color: #F0F0F0; }
   .row.hot { background: #383838; }
+  /* Session color chip. Geometry and colors mirror icon::swatch / color::PALETTE. */
+  .chip { width: 16px; height: 16px; flex: none; margin-right: 13px; box-sizing: border-box; }
   .dot { width: 26px; flex: none; font-size: 17px; line-height: 1; }
   .waiting .dot { color: #E5482F; }
   .busy    .dot { color: #2E8BE0; }
@@ -85,10 +87,10 @@
 <div class="menu">
   <div class="item head">4 Claude sessions</div>
   <div class="sep"></div>
-  <div class="item row waiting hot"><span class="dot">&#9679;</span>api-gateway-f6 &#8212; WAITING 4m &#183; permission prompt</div>
-  <div class="item row busy"><span class="dot">&#9680;</span>web-app-16 &#8212; BUSY 1m12s</div>
-  <div class="item row idle"><span class="dot">&#9675;</span><span class="dim">billing-service-b4 &#8212; IDLE 10m</span></div>
-  <div class="item row idle"><span class="dot">&#9675;</span><span class="dim">index-perf-test &#8212; IDLE 2m</span></div>
+  <div class="item row waiting hot"><span class="chip" style="background:#DB5F52;border:1px solid #A4473D"></span><span class="dot">&#9679;</span>api-gateway-f6 &#8212; WAITING 4m &#183; permission prompt</div>
+  <div class="item row busy"><span class="chip" style="background:#4C8DD9;border:1px solid #3969A2"></span><span class="dot">&#9680;</span>web-app-16 &#8212; BUSY 1m12s</div>
+  <div class="item row idle"><span class="chip" style="background:#3FA796;border:1px solid #2F7D70"></span><span class="dot">&#9675;</span><span class="dim">billing-service-b4 &#8212; IDLE 10m</span></div>
+  <div class="item row idle"><span class="chip" style="background:#D1A32B;border:1px solid #9C7A20"></span><span class="dot">&#9675;</span><span class="dim">index-perf-test &#8212; IDLE 2m</span></div>
   <div class="sep"></div>
   <div class="item exit">Exit</div>
 </div>
