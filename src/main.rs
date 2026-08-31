@@ -225,6 +225,7 @@ fn alert_rows(sessions: &[Session], now_ms: u64) -> Vec<AlertRow> {
             pid: s.pid,
             deep_link: s.deep_link(),
             dot: icon::status_dot(s.status),
+            repo: s.repo,
         })
         .collect()
 }
@@ -236,6 +237,7 @@ fn sample_sessions(now_ms: u64) -> Vec<Session> {
             provider: session::Provider::ClaudeCode,
             pid: 0,
             name: "api-gateway-f6".to_string(),
+            repo: session::Repo::PrOpen,
             cwd: String::new(),
             title: Some("Rate limiting rollout".to_string()),
             session_id: None,
@@ -249,8 +251,9 @@ fn sample_sessions(now_ms: u64) -> Vec<Session> {
             provider: session::Provider::Cursor,
             pid: 0,
             name: "scale-fun-der".to_string(),
+            repo: session::Repo::Branch,
             cwd: String::new(),
-            title: Some("Claude-tray repo setup".to_string()),
+            title: Some("Snyk issue sweep".to_string()),
             session_id: None,
             entrypoint: None,
             desktop_session_id: None,

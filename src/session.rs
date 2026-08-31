@@ -29,6 +29,20 @@ impl Provider {
     }
 }
 
+/// What a session has done to the repository it is working in.
+///
+/// Ordered by what most wants looking at: an open pull request is live work, a merged one is done,
+/// a branch with no pull request is unfinished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Repo {
+    #[default]
+    Nothing,
+    /// A branch was written, but no pull request opened for it.
+    Branch,
+    PrOpen,
+    PrMerged,
+}
+
 /// Serialized in the config file as lowercase names, matching the on-disk registry vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -124,6 +138,8 @@ pub struct Session {
     /// The desktop app's id for this session, when it has a record of it. Its deep links expect
     /// this, not the CLI session id.
     pub desktop_session_id: Option<String>,
+    /// Branch and pull-request state, where the tool records it.
+    pub repo: Repo,
     /// Claude Code's own id for the session, used to build a deep link.
     pub session_id: Option<String>,
     pub entrypoint: Option<String>,
@@ -272,6 +288,7 @@ impl Registry {
                 cwd: raw.cwd.clone(),
                 title: None,
                 desktop_session_id: None,
+                repo: Repo::default(),
                 session_id: raw
                     .session_id
                     .as_deref()
@@ -370,6 +387,7 @@ mod tests {
             cwd: String::new(),
             title: None,
             desktop_session_id: desktop_session_id.map(str::to_string),
+            repo: Repo::default(),
             session_id: Some("48a3f9c8-1785-4075-a0e0-e46e97574e8b".to_string()),
             entrypoint: entrypoint.map(str::to_string),
             status: Status::Idle,

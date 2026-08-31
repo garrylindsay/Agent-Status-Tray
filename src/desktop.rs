@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::session::Repo;
+
 /// The fields used here. The files also carry MCP tool lists and other bulk that is ignored.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +28,15 @@ struct Record {
     last_activity_at: Option<u64>,
     is_archived: Option<bool>,
     title: Option<String>,
+    /// Branches this session wrote, whether or not a pull request came of them.
+    written_branches: Option<Vec<String>>,
+    prs: Option<Vec<Pr>>,
+}
+
+/// A pull request the session opened. Only its state is used here.
+#[derive(Debug, Clone, Deserialize)]
+struct Pr {
+    state: Option<String>,
 }
 
 /// What the tray takes from a desktop record.
@@ -37,12 +48,39 @@ pub struct Info {
     pub last_activity_at: u64,
     pub archived: bool,
     pub title: Option<String>,
+    pub repo: Repo,
 }
 
 impl Info {
     /// True when something happened after you last looked — the desktop app's blue dot.
     pub fn unread(&self) -> bool {
         self.last_activity_at > self.last_focused_at
+    }
+}
+
+impl Record {
+    /// The session's repository state, most-live first.
+    ///
+    /// A session can hold several pull requests at once — one merged, one still open. The open one
+    /// is the one still wanting something, so it decides the mark.
+    fn repo(&self) -> Repo {
+        let prs = self.prs.as_deref().unwrap_or(&[]);
+        let state = |want: &str| {
+            prs.iter()
+                .any(|pr| pr.state.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(want)))
+        };
+        if state("OPEN") || state("DRAFT") {
+            return Repo::PrOpen;
+        }
+        if state("MERGED") {
+            return Repo::PrMerged;
+        }
+        // A branch with no pull request at all is work that has not been put up yet.
+        let branches = self.written_branches.as_deref().unwrap_or(&[]);
+        if branches.iter().any(|b| !b.trim().is_empty()) {
+            return Repo::Branch;
+        }
+        Repo::Nothing
     }
 }
 
@@ -132,6 +170,7 @@ impl Desktop {
                     last_focused_at: record.last_focused_at.unwrap_or(0),
                     last_activity_at: record.last_activity_at.unwrap_or(0),
                     archived: record.is_archived.unwrap_or(false),
+                    repo: record.repo(),
                     title: record
                         .title
                         .clone()
@@ -163,6 +202,7 @@ impl Desktop {
             let Some(info) = self.get(&id) else { continue };
 
             session.desktop_session_id = Some(info.session_id.clone());
+            session.repo = info.repo;
             if session.title.is_none() {
                 session.title = info.title.clone();
             }
@@ -192,7 +232,56 @@ mod tests {
             last_activity_at: activity,
             archived: false,
             title: None,
+            repo: Repo::Nothing,
         }
+    }
+
+    fn record(states: &[&str], branches: &[&str]) -> Record {
+        Record {
+            session_id: "local_x".to_string(),
+            cli_session_id: None,
+            last_focused_at: None,
+            last_activity_at: None,
+            is_archived: None,
+            title: None,
+            written_branches: Some(branches.iter().map(|b| b.to_string()).collect()),
+            prs: Some(
+                states
+                    .iter()
+                    .map(|s| Pr {
+                        state: Some(s.to_string()),
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    /// An open pull request outranks a merged one: it is the one still wanting something.
+    #[test]
+    fn an_open_pull_request_wins() {
+        assert_eq!(record(&["MERGED", "OPEN"], &["a"]).repo(), Repo::PrOpen);
+        assert_eq!(record(&["OPEN"], &[]).repo(), Repo::PrOpen);
+        assert_eq!(record(&["DRAFT"], &[]).repo(), Repo::PrOpen);
+    }
+
+    #[test]
+    fn merged_beats_a_bare_branch() {
+        assert_eq!(record(&["MERGED"], &["a"]).repo(), Repo::PrMerged);
+    }
+
+    /// A branch with no pull request is work that has not been put up yet.
+    #[test]
+    fn a_branch_without_a_pull_request_is_its_own_state() {
+        assert_eq!(record(&[], &["feat/x"]).repo(), Repo::Branch);
+        assert_eq!(record(&[], &[]).repo(), Repo::Nothing);
+        assert_eq!(record(&[], &["  "]).repo(), Repo::Nothing);
+    }
+
+    /// Closed-without-merging is neither live nor done; the branch is what remains.
+    #[test]
+    fn a_closed_pull_request_falls_back_to_the_branch() {
+        assert_eq!(record(&["CLOSED"], &["feat/x"]).repo(), Repo::Branch);
+        assert_eq!(record(&["CLOSED"], &[]).repo(), Repo::Nothing);
     }
 
     /// Blue means "something happened since you looked", not "something happened".

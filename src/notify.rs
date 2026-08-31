@@ -15,8 +15,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, Ellipse,
-    EndPaint, FillRect, GetTextExtentPoint32W, HDC, InvalidateRect, PAINTSTRUCT, PS_SOLID,
-    SelectObject, SetBkMode, SetTextColor,
+    EndPaint, FillRect, GetTextExtentPoint32W, HDC, InvalidateRect, LineTo, MoveToEx, PAINTSTRUCT,
+    PS_SOLID, SelectObject, SetBkMode, SetTextColor,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -95,6 +95,8 @@ pub struct AlertRow {
     pub deep_link: Option<String>,
     /// Status dot: colour, and whether it is filled or a hollow ring.
     pub dot: ([u8; 4], bool),
+    /// Branch or pull-request mark drawn after the dot, where the tool records one.
+    pub repo: crate::session::Repo,
 }
 
 /// What the window paints on its next `WM_PAINT`.
@@ -142,7 +144,7 @@ unsafe fn measure_width(hwnd: HWND, title: &str, rows: &[AlertRow], overflow: us
 
         SelectObject(hdc, body_font as _);
         for row in rows {
-            widest = widest.max(text_width(hdc, &row.text) + DOT_COLUMN);
+            widest = widest.max(text_width(hdc, &row.text) + DOT_COLUMN + repo_indent(row.repo));
         }
         if overflow > 0 {
             widest = widest.max(text_width(hdc, &format!("+{overflow} more")) + DOT_COLUMN);
@@ -175,7 +177,62 @@ unsafe fn measure_width(hwnd: HWND, title: &str, rows: &[AlertRow], overflow: us
 
 /// Space reserved at the left of a row for its status dot.
 const DOT_COLUMN: i32 = 16;
+/// Space after the dot for the repository mark, when a row has one.
+const REPO_COLUMN: i32 = 15;
 const DOT_R: i32 = 5;
+
+/// Draws the branch or pull-request mark.
+///
+/// A branch forks and a pull request points, so the two read apart by shape as well as colour —
+/// merged pull requests and bare branches share a colour in the session list this follows.
+unsafe fn draw_repo(
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    cx: i32,
+    cy: i32,
+    repo: crate::session::Repo,
+) {
+    use crate::session::Repo;
+
+    let Some([r, g, b, _]) = crate::icon::repo_mark(repo) else {
+        return;
+    };
+    unsafe {
+        let color = rgb(r, g, b);
+        let pen = CreatePen(PS_SOLID, 2, color);
+        let old = SelectObject(hdc, pen as _);
+
+        match repo {
+            Repo::PrOpen | Repo::PrMerged => {
+                // An arrow into a node: the change is going somewhere.
+                MoveToEx(hdc, cx - 5, cy, ptr::null_mut());
+                LineTo(hdc, cx + 1, cy);
+                MoveToEx(hdc, cx - 2, cy - 3, ptr::null_mut());
+                LineTo(hdc, cx + 1, cy);
+                MoveToEx(hdc, cx - 2, cy + 3, ptr::null_mut());
+                LineTo(hdc, cx + 1, cy);
+                SelectObject(hdc, old);
+                DeleteObject(pen as _);
+                circle(hdc, cx + 4, cy, 2, color);
+                return;
+            }
+            Repo::Branch => {
+                // A fork: work that split off and has not been put up.
+                MoveToEx(hdc, cx, cy + 5, ptr::null_mut());
+                LineTo(hdc, cx, cy + 1);
+                MoveToEx(hdc, cx, cy + 1, ptr::null_mut());
+                LineTo(hdc, cx - 4, cy - 3);
+                MoveToEx(hdc, cx, cy + 1, ptr::null_mut());
+                LineTo(hdc, cx + 4, cy - 3);
+            }
+            Repo::Nothing => {}
+        }
+
+        SelectObject(hdc, old);
+        DeleteObject(pen as _);
+        circle(hdc, cx - 4, cy - 4, 2, color);
+        circle(hdc, cx + 4, cy - 4, 2, color);
+    }
+}
 
 /// Fills a circle of `radius` at `(cx, cy)` in one colour.
 unsafe fn circle(
@@ -226,6 +283,15 @@ unsafe fn draw_dot(
 
 /// Y of the first session row, which is where hit-testing starts.
 const ROWS_TOP: i32 = PAD + TITLE_H + GAP;
+
+/// Width a row's text is pushed right by, so a mark never sits under the text.
+fn repo_indent(repo: crate::session::Repo) -> i32 {
+    if crate::icon::repo_mark(repo).is_some() {
+        REPO_COLUMN
+    } else {
+        0
+    }
+}
 
 /// Row under a client-area point, if the point is on one at all.
 fn row_at(y: i32, count: usize) -> Option<usize> {
@@ -550,11 +616,13 @@ unsafe fn paint(hwnd: HWND) {
                 DeleteObject(brush as _);
             }
 
-            draw_dot(hdc, ACCENT_W + PAD + 5, y + ROW_H / 2, row.dot);
+            let middle = y + ROW_H / 2;
+            draw_dot(hdc, ACCENT_W + PAD + 5, middle, row.dot);
+            draw_repo(hdc, ACCENT_W + PAD + DOT_COLUMN + 6, middle, row.repo);
 
             SetTextColor(hdc, palette.text);
             let mut r = RECT {
-                left: ACCENT_W + PAD + DOT_COLUMN,
+                left: ACCENT_W + PAD + DOT_COLUMN + repo_indent(row.repo),
                 top: y,
                 right: width - PAD,
                 bottom: y + ROW_H,

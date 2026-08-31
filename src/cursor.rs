@@ -190,6 +190,9 @@ impl Cursor {
                 session_id: agent.bc_id.clone(),
                 entrypoint: None,
                 desktop_session_id: None,
+                // Cursor's cloud-agent records carry no branch or pull request, so there is
+                // nothing honest to mark these rows with.
+                repo: crate::session::Repo::Nothing,
                 status: agent.status(),
                 waiting_for: None,
                 since: agent.since(),

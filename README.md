@@ -21,6 +21,19 @@ Cursor's store is opened read-only.
 | Claude Code | the session registry, the transcript, and the desktop app's own record | waiting, busy, finished-unread, finished |
 | Cursor | `state.vscdb`, key `cloudAgentRepository.agents.*` | running, finished-unread, finished, failed |
 
+Rows also carry a **repository mark** where the tool records one: a green arrow for an open pull
+request, purple for a merged one, and a purple fork for a branch that has no pull request yet. An
+open pull request wins over a merged one, because it is the one still wanting something.
+
+Only Claude Code rows can have this. Its records carry `prs` — with a `state` of `OPEN`, `MERGED`
+or `CLOSED` — and `writtenBranches`. Cursor's cloud-agent records carry no branch and no pull
+request at all: it stores branch-to-PR links separately under `branchMetadata.prUrl`, keyed by
+branch, with a URL but no state, and nothing ties an agent to the branch it used. Marking those
+rows would mean asking GitHub, which this program does not do.
+
+A tray menu item can carry one icon and that is the status dot, so menu rows say the repository
+state in words (`· PR open`) where the alert draws the mark.
+
 Cursor's **cloud agents** carry a real status and an unread flag, so every row shows genuine state.
 Its local chats are deliberately not listed: they live in `conversation-search.db` with a title and
 a timestamp but no live state, and there are hundreds of them — they would bury the agents that are
@@ -37,6 +50,10 @@ bundle rather than guessed:
 tray icon:  ( 2 )   red disc   -> 2 sessions waiting on you
             ( 1 )   blue disc  -> 1 session working, none blocked
             ( 4 )   gray ring  -> 4 sessions, all idle
+
+repo mark:  green  arrow   -> pull request open
+            purple arrow   -> pull request merged
+            purple fork    -> branch written, no pull request
 
 row dots:   amber  filled  -> waiting on you
             red    filled  -> failed

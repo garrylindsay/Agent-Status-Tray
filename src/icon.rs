@@ -2,7 +2,7 @@
 //!
 //! 32x32 RGBA, rendered from scratch so there are no image assets or font dependencies.
 
-use crate::session::{IconKind, IconState, Status};
+use crate::session::{IconKind, IconState, Repo, Status};
 
 const SIZE: u32 = 32;
 const OUTER_R: f32 = 15.0;
@@ -162,6 +162,21 @@ pub const DOT_DONE: Rgba = [0x4B, 0x4A, 0x47, 0xFF];
 pub const DOT_UNREAD: Rgba = [0x2A, 0x78, 0xD6, 0xFF];
 /// Ended badly. Claude's palette has no failure colour, so this is the one addition to it.
 pub const DOT_ERROR: Rgba = [0xE5, 0x48, 0x4D, 0xFF];
+
+/// Repository marks, sampled from the same session list as the status dots.
+pub const REPO_OPEN: Rgba = [0x26, 0xD7, 0x37, 0xFF];
+pub const REPO_MERGED: Rgba = [0xB2, 0x8B, 0xF8, 0xFF];
+
+/// Colour for a repository state, and `None` where there is nothing to draw.
+pub fn repo_mark(repo: Repo) -> Option<Rgba> {
+    match repo {
+        Repo::Nothing => None,
+        Repo::PrOpen => Some(REPO_OPEN),
+        // A merged pull request and a branch without one share a colour in the session list; the
+        // shape is what tells them apart.
+        Repo::PrMerged | Repo::Branch => Some(REPO_MERGED),
+    }
+}
 
 /// Colour and fill for a status, following the Claude desktop app's convention: amber is waiting
 /// on you, grey filled is working, a hollow ring is finished.

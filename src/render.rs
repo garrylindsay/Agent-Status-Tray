@@ -1,6 +1,6 @@
 //! Text for the menu rows and the hover tooltip.
 
-use crate::session::{Session, Status};
+use crate::session::{Repo, Session, Status};
 
 /// Windows caps `NOTIFYICONDATA.szTip` at 128 wide chars.
 const TOOLTIP_MAX: usize = 120;
@@ -45,7 +45,17 @@ fn escape_mnemonics(text: &str) -> String {
 /// where a status belongs reads as a state the session is in, and the duration beside it is the
 /// session's age rather than the age of any status, so it is labelled as uptime and nothing is
 /// claimed about what the session is doing.
-pub fn row_text(session: &Session, now_ms: u64) -> String {
+/// Words for a repository state, for surfaces that cannot draw the mark.
+fn repo_text(repo: Repo) -> Option<&'static str> {
+    match repo {
+        Repo::Nothing => None,
+        Repo::Branch => Some("branch"),
+        Repo::PrOpen => Some("PR open"),
+        Repo::PrMerged => Some("PR merged"),
+    }
+}
+
+fn row_text(session: &Session, now_ms: u64) -> String {
     let age = elapsed(now_ms.saturating_sub(session.since));
     // Rows from different tools sit in one list, so each says which tool it came from.
     let name = match &session.title {
@@ -73,11 +83,21 @@ pub fn row_text(session: &Session, now_ms: u64) -> String {
 }
 
 /// Row for the tray menu, with `&` escaped for the menu's mnemonic parser.
+///
+/// A menu item can carry one icon and that is the status dot, so the repository state has to be
+/// said in words here rather than drawn.
 pub fn row(session: &Session, now_ms: u64) -> String {
-    escape_mnemonics(&row_text(session, now_ms))
+    let mut text = row_text(session, now_ms);
+    if let Some(repo) = repo_text(session.repo) {
+        text.push_str(" \u{00b7} ");
+        text.push_str(repo);
+    }
+    escape_mnemonics(&text)
 }
 
 /// Row for the popup, which draws with `DT_NOPREFIX` and so wants the name verbatim.
+///
+/// No repository words here: the popup draws the mark instead, and saying it twice is noise.
 pub fn alert_row(session: &Session, now_ms: u64) -> String {
     row_text(session, now_ms)
 }
@@ -220,10 +240,23 @@ mod tests {
             session_id: None,
             entrypoint: None,
             desktop_session_id: None,
+            repo: Repo::Nothing,
             status,
             waiting_for: None,
             since: 0,
         }
+    }
+
+    /// The menu says the repository state in words; the popup draws it and must not repeat it.
+    #[test]
+    fn only_the_menu_spells_out_the_repository_state() {
+        let mut s = session("claude-tray-97", Status::Idle);
+        s.repo = Repo::PrOpen;
+        assert!(row(&s, 0).contains("PR open"), "menu row: {}", row(&s, 0));
+        assert!(!alert_row(&s, 0).contains("PR open"));
+
+        s.repo = Repo::Nothing;
+        assert!(!row(&s, 0).contains("PR"));
     }
 
     #[test]
