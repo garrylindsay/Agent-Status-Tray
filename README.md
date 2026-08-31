@@ -22,6 +22,53 @@ below, where a permission prompt pulls `api-gateway-f6` to the top of the list.
 <img src="docs/demo.gif" width="900"
   alt="The tray icon changing from a gray ring to blue to red as sessions start working and then block on a permission prompt, while the menu re-sorts the blocked session to the top">
 
+## Desktop alerts
+
+A tray icon only helps while you are looking at it. For the times you are not, claude-tray can
+raise an Outlook-style alert in the corner of the screen while any session sits in a status you
+asked to be told about, and repeat it on a schedule until you deal with it.
+
+```
+┌─────────────────────────────────────────────┐
+│ 2 Claude sessions are waiting on you        │
+│ ● api-gateway-f6 — WAITING 4m · permission prompt
+│ ● claude-tray-97 — WAITING 38s · input needed
+└─────────────────────────────────────────────┘
+```
+
+Everything is configured from **Settings** in the tray menu, and every change is written to disk
+the moment you click it, so nothing is lost on a reboot:
+
+| Setting | Default | Choices |
+| --- | --- | --- |
+| Show desktop alerts | on | on / off |
+| Alert me about | Waiting on you | any of waiting, busy, shell, idle, unknown |
+| Repeat alert | Every minute | only once, 30s, 1m, 2m, 5m, 10m, 15m, 30m |
+| Alert sound | Notification | none, system beep, notification, asterisk, exclamation, critical stop, question |
+| Alert stays for | 8 seconds | until clicked, 5s, 8s, 15s, 30s |
+| Check sessions every | 1 second | 0.5s, 1s, 2s, 5s, 10s, 30s |
+
+Settings live in `%APPDATA%\claude-tray\config.json`. Picking a sound plays it, so you can hear
+what you are choosing, and **Test alert now** shows a sample alert without waiting for a session
+to block.
+
+The alert repeats on the interval for as long as a session stays in a watched status. A session
+that *newly* enters one interrupts that schedule and alerts immediately, so a fresh permission
+prompt never waits out the remainder of a repeat interval. When nothing matches any more, the
+schedule re-arms, so the next one alerts at once.
+
+Click the alert to dismiss it. It never takes focus (`WS_EX_NOACTIVATE`), so it cannot swallow a
+keystroke meant for the terminal you are typing in. It is a plain Win32 window rather than a WinRT
+toast on purpose: a toast needs a registered AppUserModelID and a Start-menu shortcut, and Focus
+Assist and the per-app notification switches can silently suppress it — the wrong behaviour for
+something whose whole job is to be seen.
+
+To see one without waiting for a session to block:
+
+```powershell
+.\target\release\claude-tray.exe --demo-alert
+```
+
 ## Where the data comes from
 
 Claude Code maintains a live registry at `%USERPROFILE%\.claude\sessions\<pid>.json` (or
@@ -38,8 +85,9 @@ Claude Code maintains a live registry at `%USERPROFILE%\.claude\sessions\<pid>.j
   `sandbox request`, `worker request`.
 - `kind` is one of `interactive`, `bg`, `daemon`, `daemon-worker`; daemon kinds are not listed.
 
-The registry is polled once per second. A session whose JSON is caught mid-write falls back to the
-last good copy for that tick, so rows don't flicker.
+The registry is polled once per second by default, adjustable under Settings → Check sessions
+every. A session whose JSON is caught mid-write falls back to the last good copy for that tick, so
+rows don't flicker.
 
 Claude Code deletes a session's file on a clean exit, but a killed session leaves the file behind,
 so each pid is verified to be a running `claude.exe` before it is listed. That check also guards
@@ -69,6 +117,11 @@ $s.Save()
 
 ## Limitations
 
+- Some Claude Code builds do not write a `status` field to the session file at all (observed on
+  2.1.247, which advertises a `notify_idle` peer feature and appears to publish status over its
+  messaging pipe instead). Where that is the case every session reads as `Unknown`, the icon stays
+  a gray ring with a live count, and the waiting/busy colours never appear. Alerts still work —
+  tick **Unknown / not reported** under Settings → Alert me about.
 - Clicking a session row does nothing. Windows Terminal has no API to activate a specific tab, so
   "click to jump to that session" can't be done properly; the rows are informational.
 - The menu is a snapshot from the moment it opened — Windows can't repaint an open menu, so elapsed

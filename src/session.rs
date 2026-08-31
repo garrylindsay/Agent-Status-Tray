@@ -8,11 +8,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::liveness;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serialized in the config file as lowercase names, matching the on-disk registry vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Status {
     Waiting,
     Busy,
@@ -39,6 +41,39 @@ impl Status {
             Status::Shell => "SHELL",
             Status::Idle => "IDLE",
             Status::Unknown => "?",
+        }
+    }
+
+    /// Stable fragment for menu item ids and the config file.
+    pub fn key(self) -> &'static str {
+        match self {
+            Status::Waiting => "waiting",
+            Status::Busy => "busy",
+            Status::Shell => "shell",
+            Status::Idle => "idle",
+            Status::Unknown => "unknown",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Status> {
+        match key {
+            "waiting" => Some(Status::Waiting),
+            "busy" => Some(Status::Busy),
+            "shell" => Some(Status::Shell),
+            "idle" => Some(Status::Idle),
+            "unknown" => Some(Status::Unknown),
+            _ => None,
+        }
+    }
+
+    /// Longer text for the settings menu, where `WAITING` alone reads as shouting.
+    pub fn menu_label(self) -> &'static str {
+        match self {
+            Status::Waiting => "Waiting on you",
+            Status::Busy => "Busy",
+            Status::Shell => "Running a shell command",
+            Status::Idle => "Idle",
+            Status::Unknown => "Unknown / not reported",
         }
     }
 

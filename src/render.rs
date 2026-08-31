@@ -35,8 +35,8 @@ fn escape_mnemonics(text: &str) -> String {
     text.replace('&', "&&")
 }
 
-/// One menu row: `● api-gateway-f6 — WAITING 4m · permission prompt`
-pub fn row(session: &Session, now_ms: u64) -> String {
+/// One row: `● api-gateway-f6 — WAITING 4m · permission prompt`
+pub fn row_text(session: &Session, now_ms: u64) -> String {
     let age = now_ms.saturating_sub(session.since);
     let mut text = format!(
         "{} {} \u{2014} {} {}",
@@ -49,7 +49,34 @@ pub fn row(session: &Session, now_ms: u64) -> String {
         text.push_str(" \u{00b7} ");
         text.push_str(reason);
     }
-    escape_mnemonics(&text)
+    text
+}
+
+/// Row for the tray menu, with `&` escaped for the menu's mnemonic parser.
+pub fn row(session: &Session, now_ms: u64) -> String {
+    escape_mnemonics(&row_text(session, now_ms))
+}
+
+/// Row for the popup, which draws with `DT_NOPREFIX` and so wants the name verbatim.
+pub fn alert_row(session: &Session, now_ms: u64) -> String {
+    row_text(session, now_ms)
+}
+
+/// Popup heading: names what is actually wanted from you when that is unambiguous.
+pub fn alert_title(sessions: &[Session]) -> String {
+    let n = sessions.len();
+    let all_waiting = sessions.iter().all(|s| s.status == Status::Waiting);
+    if all_waiting {
+        if n == 1 {
+            "1 Claude session is waiting on you".to_string()
+        } else {
+            format!("{n} Claude sessions are waiting on you")
+        }
+    } else if n == 1 {
+        "1 Claude session needs attention".to_string()
+    } else {
+        format!("{n} Claude sessions need attention")
+    }
 }
 
 pub fn header(sessions: &[Session]) -> String {
