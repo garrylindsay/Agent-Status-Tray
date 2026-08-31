@@ -12,11 +12,11 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, Ellipse,
-    EndPaint, FillRect, InvalidateRect, PAINTSTRUCT, PS_SOLID, SelectObject, SetBkMode,
-    SetTextColor,
+    EndPaint, FillRect, GetTextExtentPoint32W, HDC, InvalidateRect, PAINTSTRUCT, PS_SOLID,
+    SelectObject, SetBkMode, SetTextColor,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -25,6 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     ShowWindow, SystemParametersInfoW, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR,
     WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
+use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
 
 use crate::config::Sound;
 use crate::theme::Palette;
@@ -33,9 +34,11 @@ use crate::theme::Palette;
 /// null-hwnd poll timer in `main`.
 const DISMISS_TIMER: usize = 1;
 
-/// Wide enough for `name · conversation title — WAITING 4m · permission prompt` without
-/// ellipsizing the part that says what is wanted from you.
-const WIDTH: i32 = 580;
+/// The card sizes itself to its longest row so a conversation title is shown in full, within
+/// these bounds. Narrower than the minimum looks stunted; wider than the maximum stops being a
+/// notification and starts being a window.
+const MIN_WIDTH: i32 = 440;
+const MAX_WIDTH: i32 = 1100;
 const PAD: i32 = 14;
 const ACCENT_W: i32 = 4;
 const TITLE_H: i32 = 24;
@@ -107,6 +110,67 @@ struct Content {
     duration_secs: u64,
     /// System colours, sampled when the alert is shown.
     palette: Option<Palette>,
+    /// Width this content was measured for.
+    width: i32,
+}
+
+/// Width of `text` in the font currently selected into `hdc`.
+unsafe fn text_width(hdc: HDC, text: &str) -> i32 {
+    unsafe {
+        let buf = wide(text);
+        let mut size = SIZE { cx: 0, cy: 0 };
+        // The trailing NUL is not part of the string being measured.
+        GetTextExtentPoint32W(hdc, buf.as_ptr(), buf.len() as i32 - 1, &mut size);
+        size.cx
+    }
+}
+
+/// Card width that fits the title and every row, clamped and kept inside the work area.
+unsafe fn measure_width(hwnd: HWND, title: &str, rows: &[AlertRow], overflow: usize) -> i32 {
+    unsafe {
+        let hdc = GetDC(hwnd);
+        if hdc.is_null() {
+            return MIN_WIDTH;
+        }
+
+        let face = wide("Segoe UI");
+        let title_font = CreateFontW(-19, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, face.as_ptr());
+        let body_font = CreateFontW(-16, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, face.as_ptr());
+
+        let old = SelectObject(hdc, title_font as _);
+        let mut widest = text_width(hdc, title);
+
+        SelectObject(hdc, body_font as _);
+        for row in rows {
+            widest = widest.max(text_width(hdc, &row.text) + DOT_COLUMN);
+        }
+        if overflow > 0 {
+            widest = widest.max(text_width(hdc, &format!("+{overflow} more")) + DOT_COLUMN);
+        }
+
+        SelectObject(hdc, old);
+        DeleteObject(title_font as _);
+        DeleteObject(body_font as _);
+        ReleaseDC(hwnd, hdc);
+
+        // A couple of pixels of slack, so the last glyph never sits against the ellipsis test.
+        let wanted = widest + ACCENT_W + PAD * 2 + 4;
+
+        let mut work = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let ceiling = if SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            &mut work as *mut RECT as *mut c_void,
+            0,
+        ) != 0
+        {
+            MAX_WIDTH.min(work.right - work.left - 24)
+        } else {
+            MAX_WIDTH
+        };
+
+        wanted.clamp(MIN_WIDTH, ceiling.max(MIN_WIDTH))
+    }
 }
 
 /// Space reserved at the left of a row for its status dot.
@@ -212,7 +276,7 @@ impl Popup {
                 WS_POPUP,
                 0,
                 0,
-                WIDTH,
+                MIN_WIDTH,
                 120,
                 ptr::null_mut(),
                 ptr::null_mut(),
@@ -238,6 +302,8 @@ impl Popup {
         let shown: Vec<AlertRow> = rows.iter().take(MAX_ROWS).cloned().collect();
         let overflow = rows.len().saturating_sub(shown.len());
 
+        let width = unsafe { measure_width(self.hwnd, title, &shown, overflow) };
+
         CONTENT.with(|c| {
             *c.borrow_mut() = Content {
                 title: title.to_string(),
@@ -247,6 +313,7 @@ impl Popup {
                 hover: None,
                 duration_secs,
                 palette: Some(Palette::current()),
+                width,
             };
         });
 
@@ -268,7 +335,7 @@ impl Popup {
                 0,
             );
             let (x, y) = if ok != 0 {
-                (work.right - WIDTH - 12, work.bottom - height - 12)
+                (work.right - width - 12, work.bottom - height - 12)
             } else {
                 (100, 100)
             };
@@ -278,7 +345,7 @@ impl Popup {
                 HWND_TOPMOST,
                 x,
                 y,
-                WIDTH,
+                width,
                 height,
                 // No activation: the alert must never take focus from the terminal.
                 0x0010 | 0x0040, // SWP_NOACTIVATE | SWP_SHOWWINDOW
@@ -419,10 +486,11 @@ unsafe fn paint(hwnd: HWND) {
         let rect = ps.rcPaint;
         // Repaint the whole card, not just the damaged strip: the layout is cheap and this keeps
         // the accent bar and text from being clipped mid-glyph.
+        let width = if content.width > 0 { content.width } else { MIN_WIDTH };
         let mut full = RECT {
             left: 0,
             top: 0,
-            right: WIDTH,
+            right: width,
             bottom: rect.bottom.max(400),
         };
 
@@ -454,7 +522,7 @@ unsafe fn paint(hwnd: HWND) {
         let mut line = RECT {
             left: ACCENT_W + PAD,
             top: PAD,
-            right: WIDTH - PAD,
+            right: width - PAD,
             bottom: PAD + TITLE_H,
         };
         let mut text = wide(&content.title);
@@ -474,7 +542,7 @@ unsafe fn paint(hwnd: HWND) {
                 let band = RECT {
                     left: ACCENT_W,
                     top: y,
-                    right: WIDTH,
+                    right: width,
                     bottom: y + ROW_H,
                 };
                 let brush = CreateSolidBrush(palette.hover);
@@ -488,7 +556,7 @@ unsafe fn paint(hwnd: HWND) {
             let mut r = RECT {
                 left: ACCENT_W + PAD + DOT_COLUMN,
                 top: y,
-                right: WIDTH - PAD,
+                right: width - PAD,
                 bottom: y + ROW_H,
             };
             let mut t = wide(&row.text);
@@ -507,7 +575,7 @@ unsafe fn paint(hwnd: HWND) {
             let mut r = RECT {
                 left: ACCENT_W + PAD + DOT_COLUMN,
                 top: y,
-                right: WIDTH - PAD,
+                right: width - PAD,
                 bottom: y + ROW_H,
             };
             let mut t = wide(&format!("+{} more", content.overflow));

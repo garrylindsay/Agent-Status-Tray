@@ -161,18 +161,64 @@ impl MenuRow {
     }
 }
 
-/// Accent for the alert, taken from the most urgent session in it.
+/// Sessions as the alert draws them. Every alert goes through here — real, test and demo — so a
+/// sample can never drift away from the real thing's appearance.
+fn alert_rows(sessions: &[Session], now_ms: u64) -> Vec<AlertRow> {
+    sessions
+        .iter()
+        .map(|s| AlertRow {
+            text: render::alert_row(s, now_ms),
+            pid: s.pid,
+            deep_link: s.deep_link(),
+            dot: icon::status_dot(s.status),
+        })
+        .collect()
+}
+
+/// Stand-in sessions for the test and demo alerts: one waiting on you, one working.
+fn sample_sessions(now_ms: u64) -> Vec<Session> {
+    vec![
+        Session {
+            pid: 0,
+            name: "api-gateway-f6".to_string(),
+            cwd: String::new(),
+            title: Some("Rate limiting rollout".to_string()),
+            session_id: None,
+            entrypoint: None,
+            status: Status::Waiting,
+            waiting_for: Some("permission prompt".to_string()),
+            since: now_ms.saturating_sub(240_000),
+        },
+        Session {
+            pid: 0,
+            name: "claude-tray-97".to_string(),
+            cwd: String::new(),
+            title: Some("Claude-tray repo setup".to_string()),
+            session_id: None,
+            entrypoint: None,
+            status: Status::Busy,
+            waiting_for: None,
+            since: now_ms.saturating_sub(12_000),
+        },
+    ]
+}
+
+/// Colour of the alert's left bar.
+///
+/// Amber when something is waiting on you, matching the dot; otherwise the Windows accent colour.
+/// Never grey: the alert only appears because you asked to be told about these sessions, and a
+/// grey bar reads as a dead notification.
 fn accent_for(sessions: &[Session]) -> (u8, u8, u8) {
     if sessions.iter().any(|s| s.status == Status::Waiting) {
-        (0xE5, 0x48, 0x2F)
-    } else if sessions
-        .iter()
-        .any(|s| matches!(s.status, Status::Busy | Status::Shell))
-    {
-        (0x2E, 0x8B, 0xE0)
-    } else {
-        (0x9A, 0xA0, 0xAA)
+        let [r, g, b, _] = icon::DOT_WAITING;
+        return (r, g, b);
     }
+    let accent = theme::Palette::current().accent;
+    (
+        (accent & 0xFF) as u8,
+        ((accent >> 8) & 0xFF) as u8,
+        ((accent >> 16) & 0xFF) as u8,
+    )
 }
 
 /// Returns the sessions it rendered, so a later menu click can resolve a pid back to one.
@@ -217,15 +263,7 @@ fn tick(
         && let Some(popup) = popup
     {
         let owned: Vec<Session> = matching.into_iter().cloned().collect();
-        let lines: Vec<AlertRow> = owned
-            .iter()
-            .map(|s| AlertRow {
-                text: render::alert_row(s, now),
-                pid: s.pid,
-                deep_link: s.deep_link(),
-                dot: icon::status_dot(s.status),
-            })
-            .collect();
+        let lines = alert_rows(&owned, now);
         popup.show(
             &render::alert_title(&owned),
             &lines,
@@ -242,24 +280,12 @@ fn tick(
 /// The rows carry pid 0, so clicking one dismisses without chasing a window.
 fn show_test_alert(config: &Config, popup: Option<&Popup>) {
     if let Some(popup) = popup {
+        let now = now_ms();
+        let sessions = sample_sessions(now);
         popup.show(
             "Test alert",
-            &[
-                AlertRow {
-                    text: "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt"
-                        .to_string(),
-                    pid: 0,
-                    deep_link: None,
-                    dot: icon::status_dot(Status::Waiting),
-                },
-                AlertRow {
-                    text: "\u{25d0} claude-tray-97 \u{2014} BUSY 12s".to_string(),
-                    pid: 0,
-                    deep_link: None,
-                    dot: icon::status_dot(Status::Waiting),
-                },
-            ],
-            (0xE5, 0x48, 0x2F),
+            &alert_rows(&sessions, now),
+            accent_for(&sessions),
             config.popup_secs,
             config.sound,
         );
@@ -282,39 +308,15 @@ fn demo_alert() {
             session.title = titles.get(&session.cwd, &id);
         }
     }
-    let rows: Vec<AlertRow> = if sessions.is_empty() {
-        vec![
-            AlertRow {
-                text: "\u{25cf} api-gateway-f6 \u{2014} WAITING 4m \u{b7} permission prompt"
-                    .to_string(),
-                pid: 0,
-                deep_link: None,
-                dot: icon::status_dot(Status::Waiting),
-            },
-            AlertRow {
-                text: "\u{25cf} claude-tray-97 \u{2014} WAITING 38s \u{b7} input needed"
-                    .to_string(),
-                pid: 0,
-                deep_link: None,
-                dot: icon::status_dot(Status::Waiting),
-            },
-        ]
-    } else {
-        sessions
-            .iter()
-            .map(|s| AlertRow {
-                text: render::alert_row(s, now),
-                pid: s.pid,
-                deep_link: s.deep_link(),
-                dot: icon::status_dot(s.status),
-            })
-            .collect()
-    };
+    if sessions.is_empty() {
+        sessions = sample_sessions(now);
+    }
+    let rows = alert_rows(&sessions, now);
 
     popup.show(
         &render::alert_title(&sessions),
         &rows,
-        (0xE5, 0x48, 0x2F),
+        accent_for(&sessions),
         0,
         config.sound,
     );

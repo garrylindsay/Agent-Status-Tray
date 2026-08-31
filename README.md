@@ -37,6 +37,9 @@ asked to be told about, and repeat it on a schedule until you deal with it.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+The card sizes itself to its longest row, so a conversation title is never cut short, within a
+minimum and a maximum and never wider than the work area.
+
 Rows carry the conversation's own title beside the registry name. The registry name is derived
 from the folder (`claude-tray-97`), so it says *where* a session is but not what it is about, and
 two sessions in the same folder differ only by a suffix. The title is read from Claude Code's
