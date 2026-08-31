@@ -376,7 +376,14 @@ fn main() {
         return;
     }
 
+    let config_missing = config::path().map(|p| !p.exists()).unwrap_or(false);
     let mut config = Config::load();
+    // Write the defaults out on first run, so the file is there to inspect or hand-edit rather
+    // than only appearing once a setting is changed.
+    if config_missing {
+        config.save();
+    }
+
     let mut registry = Registry::new();
     let mut alerter = Alerter::new();
     let sessions = registry.scan();
