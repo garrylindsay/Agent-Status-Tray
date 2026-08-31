@@ -44,8 +44,6 @@ const ACCENT_W: i32 = 4;
 const TITLE_H: i32 = 24;
 const ROW_H: i32 = 20;
 const GAP: i32 = 6;
-/// Rows beyond this collapse into a "+N more" line, so the alert stays alert-sized.
-const MAX_ROWS: usize = 4;
 
 /// Transparent background, so `TRANSPARENT` for `SetBkMode`.
 const BK_TRANSPARENT: i32 = 1;
@@ -338,7 +336,7 @@ impl Popup {
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 class_name.as_ptr(),
-                wide("Claude sessions").as_ptr(),
+                wide("Agent sessions").as_ptr(),
                 WS_POPUP,
                 0,
                 0,
@@ -357,6 +355,8 @@ impl Popup {
     }
 
     /// Shows (or refreshes) the alert. `duration_secs` of 0 leaves it up until it is clicked.
+    /// `max_rows` of 0 shows every row; anything beyond it collapses into a "+N more" line, so an
+    /// alert stays alert-sized rather than becoming a window.
     pub fn show(
         &self,
         title: &str,
@@ -364,8 +364,10 @@ impl Popup {
         accent: (u8, u8, u8),
         duration_secs: u64,
         sound: Sound,
+        max_rows: usize,
     ) {
-        let shown: Vec<AlertRow> = rows.iter().take(MAX_ROWS).cloned().collect();
+        let limit = if max_rows == 0 { rows.len() } else { max_rows };
+        let shown: Vec<AlertRow> = rows.iter().take(limit).cloned().collect();
         let overflow = rows.len().saturating_sub(shown.len());
 
         let width = unsafe { measure_width(self.hwnd, title, &shown, overflow) };

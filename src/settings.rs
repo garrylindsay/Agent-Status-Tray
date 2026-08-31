@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use crate::config::{self, Config, Sound};
+use crate::config::{self, Config, Sort, Sound};
 use crate::session::Status;
 use crate::theme::Palette;
 
@@ -71,6 +71,8 @@ fn wide(text: &str) -> Vec<u16> {
 /// Which multi-valued setting a cycle row drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
+    Sort,
+    Rows,
     Repeat,
     Sound,
     Popup,
@@ -132,7 +134,7 @@ fn layout(config: &Config) -> Vec<Row> {
     };
 
     push(
-        RowKind::Title("claude-tray settings".to_string()),
+        RowKind::Title("Agent Status Tray".to_string()),
         TITLE_H,
         None,
         &mut y,
@@ -166,6 +168,31 @@ fn layout(config: &Config) -> Vec<Row> {
             &mut y,
         );
     }
+
+    push(
+        RowKind::Section("Session list".to_string()),
+        SECTION_H,
+        None,
+        &mut y,
+    );
+    push(
+        RowKind::Cycle {
+            label: "Sort rows by".to_string(),
+            value: config.sort.label().to_string(),
+        },
+        ROW_H,
+        Some(Action::Cycle(Field::Sort, 1)),
+        &mut y,
+    );
+    push(
+        RowKind::Cycle {
+            label: "Alert shows at most".to_string(),
+            value: config::rows_label(config.max_alert_rows),
+        },
+        ROW_H,
+        Some(Action::Cycle(Field::Rows, 1)),
+        &mut y,
+    );
 
     push(
         RowKind::Section("Timing and sound".to_string()),
@@ -233,6 +260,10 @@ fn apply(action: Action, config: &mut Config) -> bool {
     match action {
         Action::ToggleEnabled => config.notifications_enabled = !config.notifications_enabled,
         Action::ToggleStatus(status) => config.toggle_status(status),
+        Action::Cycle(Field::Sort, dir) => config.sort = cycle(&Sort::ALL, config.sort, dir),
+        Action::Cycle(Field::Rows, dir) => {
+            config.max_alert_rows = cycle(&config::ROW_CHOICES, config.max_alert_rows, dir)
+        }
         Action::Cycle(Field::Repeat, dir) => {
             config.repeat_secs = cycle(&config::REPEAT_CHOICES, config.repeat_secs, dir)
         }
@@ -820,10 +851,27 @@ mod tests {
     }
 
     #[test]
+    fn the_sort_row_cycles_through_every_order() {
+        let mut config = Config::default();
+        assert_eq!(config.sort, Sort::Attention);
+        apply(Action::Cycle(Field::Sort, 1), &mut config);
+        assert_eq!(config.sort, Sort::Recent);
+        apply(Action::Cycle(Field::Sort, 1), &mut config);
+        assert_eq!(config.sort, Sort::Oldest);
+        // Wraps, and steps backwards.
+        apply(Action::Cycle(Field::Sort, 1), &mut config);
+        assert_eq!(config.sort, Sort::Attention);
+        apply(Action::Cycle(Field::Sort, -1), &mut config);
+        assert_eq!(config.sort, Sort::Oldest);
+    }
+
+    #[test]
     fn only_the_poll_row_asks_for_a_timer_rebuild() {
         let mut config = Config::default();
         assert!(apply(Action::Cycle(Field::Poll, 1), &mut config));
         assert!(!apply(Action::Cycle(Field::Repeat, 1), &mut config));
+        assert!(!apply(Action::Cycle(Field::Sort, 1), &mut config));
+        assert!(!apply(Action::Cycle(Field::Rows, 1), &mut config));
     }
 
     #[test]

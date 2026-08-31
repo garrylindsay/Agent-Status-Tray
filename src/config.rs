@@ -51,6 +51,30 @@ impl Sound {
 
 }
 
+/// How the session list is ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sort {
+    /// What needs you first, and within that the one that has been stuck longest.
+    Attention,
+    /// Most recent activity first, whatever state it is in.
+    Recent,
+    /// Oldest activity first.
+    Oldest,
+}
+
+impl Sort {
+    pub const ALL: [Sort; 3] = [Sort::Attention, Sort::Recent, Sort::Oldest];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Sort::Attention => "Attention first",
+            Sort::Recent => "Most recent",
+            Sort::Oldest => "Oldest",
+        }
+    }
+}
+
 /// Statuses that can be chosen as notification triggers, in menu order.
 pub const NOTIFIABLE: [Status; 7] = [
     Status::Waiting,
@@ -71,6 +95,17 @@ pub const POLL_CHOICES: [u64; 6] = [500, 1_000, 2_000, 5_000, 10_000, 30_000];
 /// How long a popup stays on screen, in seconds. `0` means "stay until clicked".
 pub const POPUP_CHOICES: [u64; 5] = [0, 5, 8, 15, 30];
 
+/// Rows an alert will show before collapsing the rest into "+N more". `0` means every one.
+pub const ROW_CHOICES: [u64; 7] = [3, 4, 5, 6, 8, 12, 0];
+
+pub fn rows_label(rows: u64) -> String {
+    match rows {
+        0 => "All of them".to_string(),
+        1 => "1 row".to_string(),
+        n => format!("{n} rows"),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Config {
@@ -85,6 +120,10 @@ pub struct Config {
     pub sound: Sound,
     /// Seconds before a popup dismisses itself.
     pub popup_secs: u64,
+    /// Order of the session list, in the menu and in alerts alike.
+    pub sort: Sort,
+    /// Rows an alert shows before the rest collapse into "+N more". `0` shows every one.
+    pub max_alert_rows: u64,
 }
 
 impl Default for Config {
@@ -96,6 +135,8 @@ impl Default for Config {
             poll_ms: 1_000,
             sound: Sound::Notification,
             popup_secs: 8,
+            sort: Sort::Attention,
+            max_alert_rows: 4,
         }
     }
 }
@@ -123,6 +164,10 @@ impl Config {
         if self.popup_secs != 0 {
             self.popup_secs = self.popup_secs.clamp(2, 3_600);
         }
+        // An alert taller than the screen helps nobody, and zero means "all" rather than "none".
+        if self.max_alert_rows != 0 {
+            self.max_alert_rows = self.max_alert_rows.clamp(1, 40);
+        }
         self.notify_statuses.retain(|s| NOTIFIABLE.contains(s));
         self.notify_statuses.dedup();
     }
@@ -130,7 +175,7 @@ impl Config {
     pub fn load() -> Config {
         let mut config = path()
             .and_then(|p| fs::read_to_string(p).ok())
-            .and_then(|text| serde_json::from_str::<Config>(&text).ok())
+            .and_then(|text| serde_json::from_str::<Config>(strip_bom(&text)).ok())
             .unwrap_or_default();
         config.sanitize();
         config
@@ -146,6 +191,16 @@ impl Config {
             let _ = fs::write(path, text);
         }
     }
+}
+
+/// Drops a leading byte-order mark.
+///
+/// This file is meant to be hand-editable, and plenty of Windows editors — Notepad, and PowerShell's
+/// `Set-Content -Encoding utf8` — write one. JSON has no place for it, so `serde_json` rejects the
+/// whole document and every setting silently reverts to its default, which is a miserable way to
+/// find out.
+fn strip_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
 }
 
 /// `%APPDATA%\claude-tray\config.json`, falling back to the profile directory.
@@ -207,8 +262,14 @@ mod tests {
     }
 
     #[test]
+    fn the_default_order_is_attention_first() {
+        assert_eq!(Config::default().sort, Sort::Attention);
+    }
+
+    #[test]
     fn round_trips_through_json() {
         let mut c = Config::default();
+        c.sort = Sort::Recent;
         c.toggle_status(Status::Idle);
         c.sound = Sound::Asterisk;
         c.poll_ms = 5_000;
@@ -233,12 +294,36 @@ mod tests {
             poll_ms: 0,
             repeat_secs: 1,
             popup_secs: 99_999,
+            max_alert_rows: 9_999,
             ..Config::default()
         };
         c.sanitize();
         assert_eq!(c.poll_ms, 200);
         assert_eq!(c.repeat_secs, 5);
         assert_eq!(c.popup_secs, 3_600);
+        assert_eq!(c.max_alert_rows, 40);
+    }
+
+    /// Zero means every row, so it must survive clamping rather than becoming one.
+    #[test]
+    fn showing_all_rows_is_not_clamped_away() {
+        let mut c = Config {
+            max_alert_rows: 0,
+            ..Config::default()
+        };
+        c.sanitize();
+        assert_eq!(c.max_alert_rows, 0);
+    }
+
+    /// A BOM must not throw away every setting in the file.
+    #[test]
+    fn a_byte_order_mark_is_tolerated() {
+        let text = "\u{feff}{\"pollMs\":2000,\"sort\":\"recent\"}";
+        let parsed: Config = serde_json::from_str(strip_bom(text)).unwrap();
+        assert_eq!(parsed.poll_ms, 2_000);
+        assert_eq!(parsed.sort, Sort::Recent);
+        // And the same document without one still parses.
+        assert!(serde_json::from_str::<Config>(strip_bom("{\"pollMs\":2000}")).is_ok());
     }
 
     /// Missing keys fall back to defaults rather than dropping the file.

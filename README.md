@@ -112,9 +112,17 @@ things meant reopening the menu three times.
 | Alert sound | Notification | none, system beep, notification, asterisk, exclamation, critical stop, question |
 | Alert stays for | 8 seconds | until clicked, 5s, 8s, 15s, 30s |
 | Check sessions every | 1 second | 0.5s, 1s, 2s, 5s, 10s, 30s |
+| Sort rows by | Attention first | attention first, most recent, oldest |
+| Alert shows at most | 4 rows | 3, 4, 5, 6, 8, 12, all of them |
+
+**Attention first** puts what needs you at the top and, within a state, whatever has been stuck
+longest. **Most recent** and **oldest** ignore state and go purely by last activity. The order
+applies to the tray menu and to alerts alike, so it also decides which rows survive the row limit.
 
 Settings live in `%APPDATA%\claude-tray\config.json`, written with defaults on first run so there
-is something to hand-edit. Picking a sound plays it, so you can hear what you are choosing, and
+is something to hand-edit. A leading byte-order mark is ignored on load — Notepad and PowerShell's
+`Set-Content -Encoding utf8` both write one, and JSON has no place for it, so without that every
+setting in the file would silently revert to its default. Picking a sound plays it, so you can hear what you are choosing, and
 **Test alert now** shows a sample alert without waiting for a session to block.
 
 The alert repeats on the interval for as long as a session stays in a watched status. A session

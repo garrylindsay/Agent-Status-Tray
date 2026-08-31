@@ -33,7 +33,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use alert::Alerter;
-use config::Config;
+use config::{Config, Sort};
 use cursor::Cursor;
 use desktop::Desktop;
 use notify::{AlertRow, Popup};
@@ -186,8 +186,8 @@ impl Sources {
         }
     }
 
-    /// Every provider's sessions, in one list, ordered attention-first.
-    fn collect(&mut self, now_ms: u64) -> Vec<Session> {
+    /// Every provider's sessions, in one list, in the order the settings ask for.
+    fn collect(&mut self, now_ms: u64, sort: Sort) -> Vec<Session> {
         // Claude Code: the registry says which sessions exist, the transcript supplies the title,
         // and the desktop record supplies the state the registry no longer reports.
         let mut sessions = self.registry.scan();
@@ -203,14 +203,19 @@ impl Sources {
 
         sessions.extend(self.cursor.sessions(now_ms));
 
-        // Re-sorted across providers: a failed Cursor agent outranks an idle Claude session.
-        sessions.sort_by(|a, b| {
-            a.status
-                .rank()
-                .cmp(&b.status.rank())
-                .then(a.since.cmp(&b.since))
-                .then(a.pid.cmp(&b.pid))
-        });
+        // Sorted across providers, not within each: a failed Cursor agent outranks an idle Claude
+        // session. Ties break on pid so the order cannot shuffle between ticks.
+        match sort {
+            Sort::Attention => sessions.sort_by(|a, b| {
+                a.status
+                    .rank()
+                    .cmp(&b.status.rank())
+                    .then(a.since.cmp(&b.since))
+                    .then(a.pid.cmp(&b.pid))
+            }),
+            Sort::Recent => sessions.sort_by(|a, b| b.since.cmp(&a.since).then(a.pid.cmp(&b.pid))),
+            Sort::Oldest => sessions.sort_by(|a, b| a.since.cmp(&b.since).then(a.pid.cmp(&b.pid))),
+        }
         sessions
     }
 }
@@ -297,7 +302,7 @@ fn tick(
     // Cheap, and guarded against re-flushing, so the menu follows a theme switched mid-run.
     theme::sync_menu_theme();
     let now = now_ms();
-    let sessions = sources.collect(now);
+    let sessions = sources.collect(now, config.sort);
     let rows: Vec<MenuRow> = sessions.iter().map(|s| MenuRow::new(s, now)).collect();
 
     ui.apply(
@@ -324,6 +329,7 @@ fn tick(
             accent_for(&owned),
             config.popup_secs,
             config.sound,
+            config.max_alert_rows as usize,
         );
     }
 
@@ -342,6 +348,7 @@ fn show_test_alert(config: &Config, popup: Option<&Popup>) {
             accent_for(&sessions),
             config.popup_secs,
             config.sound,
+            config.max_alert_rows as usize,
         );
     }
 }
@@ -355,7 +362,7 @@ fn demo_alert() {
 
     // Prefer the sessions actually running, so clicking a row really does jump to one.
     let now = now_ms();
-    let mut sessions = Sources::new().collect(now);
+    let mut sessions = Sources::new().collect(now, config.sort);
     if sessions.is_empty() {
         sessions = sample_sessions(now);
     }
@@ -367,6 +374,7 @@ fn demo_alert() {
         accent_for(&sessions),
         0,
         config.sound,
+        config.max_alert_rows as usize,
     );
 
     // Quit on its own so the demo cannot leave an orphan process behind.
@@ -441,7 +449,7 @@ fn main() {
 
     let mut alerter = Alerter::new();
     let mut sources = Sources::new();
-    let sessions = sources.collect(now_ms());
+    let sessions = sources.collect(now_ms(), config.sort);
     let state = session::icon_state(&sessions);
 
     // Right-click opens the menu, as every other tray icon does. Left-click is deliberately left
