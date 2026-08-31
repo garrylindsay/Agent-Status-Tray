@@ -26,6 +26,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::Sound;
+use crate::theme::Palette;
 
 /// Timer that dismisses the popup. Scoped to the popup window, so it cannot collide with the
 /// null-hwnd poll timer in `main`.
@@ -98,6 +99,8 @@ struct Content {
     hover: Option<usize>,
     /// Kept so hovering can restart the dismiss timer with the configured duration.
     duration_secs: u64,
+    /// System colours, sampled when the alert is shown.
+    palette: Option<Palette>,
 }
 
 /// Y of the first session row, which is where hit-testing starts.
@@ -186,6 +189,7 @@ impl Popup {
                 accent,
                 hover: None,
                 duration_secs,
+                palette: Some(Palette::current()),
             };
         });
 
@@ -364,7 +368,9 @@ unsafe fn paint(hwnd: HWND) {
             bottom: rect.bottom.max(400),
         };
 
-        let bg = CreateSolidBrush(rgb(0x1F, 0x1F, 0x23));
+        let palette = content.palette.unwrap_or_else(Palette::current);
+
+        let bg = CreateSolidBrush(palette.background);
         FillRect(hdc, &full, bg);
         DeleteObject(bg as _);
 
@@ -386,7 +392,7 @@ unsafe fn paint(hwnd: HWND) {
         );
 
         let old = SelectObject(hdc, title_font as _);
-        SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+        SetTextColor(hdc, palette.text);
         let mut line = RECT {
             left: ACCENT_W + PAD,
             top: PAD,
@@ -413,12 +419,12 @@ unsafe fn paint(hwnd: HWND) {
                     right: WIDTH,
                     bottom: y + ROW_H,
                 };
-                let brush = CreateSolidBrush(rgb(0x33, 0x33, 0x3C));
+                let brush = CreateSolidBrush(palette.hover);
                 FillRect(hdc, &band, brush);
                 DeleteObject(brush as _);
             }
 
-            SetTextColor(hdc, rgb(0xE4, 0xE4, 0xEA));
+            SetTextColor(hdc, palette.text);
             let mut r = RECT {
                 left: ACCENT_W + PAD,
                 top: y,
@@ -437,7 +443,7 @@ unsafe fn paint(hwnd: HWND) {
         }
 
         if content.overflow > 0 {
-            SetTextColor(hdc, rgb(0x7A, 0x7A, 0x85));
+            SetTextColor(hdc, palette.dim);
             let mut r = RECT {
                 left: ACCENT_W + PAD,
                 top: y,

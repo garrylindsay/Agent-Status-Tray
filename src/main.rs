@@ -16,6 +16,7 @@ mod notify;
 mod render;
 mod session;
 mod settings;
+mod theme;
 
 use std::ptr;
 use std::sync::Mutex;
@@ -330,8 +331,10 @@ fn main() {
     let sessions = registry.scan();
     let state = session::icon_state(&sessions);
 
+    // Right-click opens the menu, as every other tray icon does. Left-click is deliberately left
+    // alone rather than repurposed.
     let mut builder = TrayIconBuilder::new()
-        .with_menu_on_left_click(true)
+        .with_menu_on_left_click(false)
         .with_tooltip(render::tooltip(&sessions));
     if let Some(icon) = make_icon(state) {
         builder = builder.with_icon(icon);

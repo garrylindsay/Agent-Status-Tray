@@ -26,6 +26,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::config::{self, Config, Sound};
 use crate::session::Status;
+use crate::theme::Palette;
 
 /// Ticks the "has the mouse left?" check.
 const WATCH_TIMER: usize = 2;
@@ -247,6 +248,8 @@ fn apply(action: Action, config: &mut Config) -> bool {
 #[derive(Default)]
 struct State {
     config: Config,
+    /// System colours, sampled when the panel is opened.
+    palette: Option<Palette>,
     hover: Option<usize>,
     /// Set when the config changed, so the owner can persist and apply it.
     changed: bool,
@@ -323,6 +326,7 @@ impl SettingsWindow {
         STATE.with(|s| {
             let mut s = s.borrow_mut();
             s.config = config.clone();
+            s.palette = Some(Palette::current());
             s.hover = None;
             s.changed = false;
             s.poll_changed = false;
@@ -512,14 +516,15 @@ unsafe fn paint(hwnd: HWND) {
         let mut ps: PAINTSTRUCT = std::mem::zeroed();
         let hdc = BeginPaint(hwnd, &mut ps);
 
-        let (config, hover) = STATE.with(|s| {
+        let (config, hover, palette) = STATE.with(|s| {
             let s = s.borrow();
-            (s.config.clone(), s.hover)
+            (s.config.clone(), s.hover, s.palette)
         });
+        let palette = palette.unwrap_or_else(Palette::current);
         let rows = layout(&config);
         let height = panel_height(&rows);
 
-        let bg = CreateSolidBrush(rgb(0x1F, 0x1F, 0x23));
+        let bg = CreateSolidBrush(palette.background);
         let mut full = RECT {
             left: 0,
             top: 0,
@@ -529,8 +534,8 @@ unsafe fn paint(hwnd: HWND) {
         FillRect(hdc, &full, bg);
         DeleteObject(bg as _);
 
-        // A thin accent stripe down the left, matching the alert card.
-        let accent = CreateSolidBrush(rgb(0x2E, 0x8B, 0xE0));
+        // A thin stripe down the left in the user's Windows accent colour.
+        let accent = CreateSolidBrush(palette.accent);
         full.right = 3;
         FillRect(hdc, &full, accent);
         DeleteObject(accent as _);
@@ -545,7 +550,7 @@ unsafe fn paint(hwnd: HWND) {
         for (index, row) in rows.iter().enumerate() {
             let hovered = hover == Some(index) && row.action.is_some();
             if hovered {
-                let brush = CreateSolidBrush(rgb(0x2E, 0x2E, 0x36));
+                let brush = CreateSolidBrush(palette.hover);
                 let band = RECT {
                     left: 6,
                     top: row.top,
@@ -566,19 +571,19 @@ unsafe fn paint(hwnd: HWND) {
             match &row.kind {
                 RowKind::Title(label) => {
                     SelectObject(hdc, title_font as _);
-                    SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+                    SetTextColor(hdc, palette.text);
                     draw(hdc, label, &mut text_rect, DT_SINGLELINE | DT_VCENTER);
                     SelectObject(hdc, body_font as _);
                 }
                 RowKind::Section(label) => {
                     SelectObject(hdc, section_font as _);
-                    SetTextColor(hdc, rgb(0x86, 0x86, 0x92));
+                    SetTextColor(hdc, palette.dim);
                     draw(hdc, label, &mut text_rect, DT_SINGLELINE | DT_VCENTER);
                     SelectObject(hdc, body_font as _);
                 }
                 RowKind::Check { label, checked } => {
-                    draw_check(hdc, row.top + row.height / 2, *checked);
-                    SetTextColor(hdc, rgb(0xE4, 0xE4, 0xEA));
+                    draw_check(hdc, row.top + row.height / 2, *checked, &palette);
+                    SetTextColor(hdc, palette.text);
                     text_rect.left = PAD + 24;
                     draw(
                         hdc,
@@ -588,7 +593,7 @@ unsafe fn paint(hwnd: HWND) {
                     );
                 }
                 RowKind::Cycle { label, value } => {
-                    SetTextColor(hdc, rgb(0xE4, 0xE4, 0xEA));
+                    SetTextColor(hdc, palette.text);
                     let mut label_rect = RECT {
                         left: PAD,
                         top: row.top,
@@ -602,7 +607,7 @@ unsafe fn paint(hwnd: HWND) {
                         DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
                     );
 
-                    SetTextColor(hdc, rgb(0x8A, 0x8A, 0x96));
+                    SetTextColor(hdc, palette.dim);
                     let mut prev = RECT {
                         left: PREV_X0,
                         top: row.top,
@@ -618,7 +623,7 @@ unsafe fn paint(hwnd: HWND) {
                     };
                     draw(hdc, "\u{203A}", &mut next, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
 
-                    SetTextColor(hdc, rgb(0x6C, 0xB6, 0xF5));
+                    SetTextColor(hdc, palette.accent);
                     let mut value_rect = RECT {
                         left: VALUE_X0,
                         top: row.top,
@@ -634,7 +639,7 @@ unsafe fn paint(hwnd: HWND) {
                 }
                 RowKind::Button { label } => {
                     let face_brush =
-                        CreateSolidBrush(if hovered { rgb(0x3A, 0x6E, 0xA8) } else { rgb(0x2C, 0x2C, 0x34) });
+                        CreateSolidBrush(if hovered { palette.accent } else { palette.hover });
                     let button = RECT {
                         left: PAD,
                         top: row.top + 2,
@@ -643,7 +648,7 @@ unsafe fn paint(hwnd: HWND) {
                     };
                     FillRect(hdc, &button, face_brush);
                     DeleteObject(face_brush as _);
-                    SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+                    SetTextColor(hdc, if hovered { rgb(0xFF, 0xFF, 0xFF) } else { palette.text });
                     draw(
                         hdc,
                         label,
@@ -670,7 +675,12 @@ unsafe fn draw(hdc: windows_sys::Win32::Graphics::Gdi::HDC, text: &str, rect: &m
 }
 
 /// A 14px box: border, hole, and a filled core when ticked.
-unsafe fn draw_check(hdc: windows_sys::Win32::Graphics::Gdi::HDC, center_y: i32, checked: bool) {
+unsafe fn draw_check(
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    center_y: i32,
+    checked: bool,
+    palette: &Palette,
+) {
     unsafe {
         let box_rect = RECT {
             left: PAD,
@@ -678,11 +688,7 @@ unsafe fn draw_check(hdc: windows_sys::Win32::Graphics::Gdi::HDC, center_y: i32,
             right: PAD + 14,
             bottom: center_y + 7,
         };
-        let border = CreateSolidBrush(if checked {
-            rgb(0x2E, 0x8B, 0xE0)
-        } else {
-            rgb(0x6A, 0x6A, 0x78)
-        });
+        let border = CreateSolidBrush(if checked { palette.accent } else { palette.dim });
         FillRect(hdc, &box_rect, border);
         DeleteObject(border as _);
 
@@ -692,7 +698,7 @@ unsafe fn draw_check(hdc: windows_sys::Win32::Graphics::Gdi::HDC, center_y: i32,
             right: box_rect.right - 2,
             bottom: box_rect.bottom - 2,
         };
-        let hole = CreateSolidBrush(rgb(0x1F, 0x1F, 0x23));
+        let hole = CreateSolidBrush(palette.background);
         FillRect(hdc, &inner, hole);
         DeleteObject(hole as _);
 
@@ -703,7 +709,7 @@ unsafe fn draw_check(hdc: windows_sys::Win32::Graphics::Gdi::HDC, center_y: i32,
                 right: box_rect.right - 4,
                 bottom: box_rect.bottom - 4,
             };
-            let fill = CreateSolidBrush(rgb(0x2E, 0x8B, 0xE0));
+            let fill = CreateSolidBrush(palette.accent);
             FillRect(hdc, &core, fill);
             DeleteObject(fill as _);
         }

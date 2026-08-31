@@ -15,8 +15,8 @@ tray icon:  ( 2 )   red disc   -> 2 sessions waiting on you
             ( 4 )   gray ring  -> 4 sessions, all idle
 ```
 
-Click the icon for the session list, and a row in it to jump to that session. Rows are sorted
-attention-first (waiting → busy → idle), then
+Right-click the icon for the session list, and a row in it to jump to that session. Rows are
+sorted attention-first (waiting → busy → idle), then
 oldest-first within a status, so the session that has been stuck longest is always at the top — as
 below, where a permission prompt pulls `api-gateway-f6` to the top of the list.
 
@@ -71,10 +71,16 @@ rows in the tray menu do the same thing. See the limitations below for what "jum
 cannot mean.
 
 The alert never takes focus (`WS_EX_NOACTIVATE`), so it cannot swallow a keystroke meant for the
-terminal you are typing in. It is a plain Win32 window rather than a WinRT
-toast on purpose: a toast needs a registered AppUserModelID and a Start-menu shortcut, and Focus
-Assist and the per-app notification switches can silently suppress it — the wrong behaviour for
-something whose whole job is to be seen.
+terminal you are typing in. It is a plain Win32 window rather than a WinRT toast on purpose: a
+toast needs a registered AppUserModelID and a Start-menu shortcut, and Focus Assist and the
+per-app notification switches can silently suppress it — the wrong behaviour for something whose
+whole job is to be seen.
+
+Both windows paint in the system colours: `GetSysColor` for the light scheme, the shell's dark
+surface colours when apps are set to dark (`GetSysColor` predates dark mode and keeps returning
+the light scheme, so there is nothing to read for that), and the Windows accent colour for the
+panel's stripe, ticks and values. The theme is re-read each time a window is shown, so switching
+it while the app runs is picked up without a restart.
 
 To see either without going through the tray:
 
@@ -143,6 +149,12 @@ $s.Save()
   window), every one of those rows raises that same window and lands on whichever tab was last
   open. Selecting the tab would mean driving Claude Code over the private pipe named in
   `messagingSocketPath`, which is undocumented and which this program deliberately does not touch.
+- The Claude desktop app does register a `claude://` handler with a deep link that would do exactly
+  this — `claude://code/continue?session=local_<sessionId>`, where `<sessionId>` is the one in the
+  registry file and `local_` is the prefix the app's own session store uses. It is accepted (a
+  malformed id logs `code entry link invalid ?session` instead), but the handler is currently
+  behind a server-side feature flag and answers `claudeURLHandler: code entry deep link gated off`,
+  so nothing happens. Worth revisiting if that flag is ever turned on.
 - The menu is a snapshot from the moment it opened — Windows can't repaint an open menu, so elapsed
   times freeze until you close and reopen it.
 - Menu rows use the system menu font, which is proportional, so columns are separated with `—` and
