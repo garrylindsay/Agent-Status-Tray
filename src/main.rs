@@ -233,9 +233,9 @@ struct MenuRow {
 }
 
 impl MenuRow {
-    fn new(session: &Session, now_ms: u64) -> MenuRow {
+    fn new(session: &Session, now_ms: u64, window_mins: u64) -> MenuRow {
         MenuRow {
-            text: render::row(session, now_ms),
+            text: render::row(session, now_ms, window_mins),
             pid: session.pid,
             dot: icon::status_dot(session.status),
             repo: session.repo,
@@ -304,6 +304,18 @@ impl Sources {
             }),
             Sort::Recent => sessions.sort_by(|a, b| b.since.cmp(&a.since).then(a.pid.cmp(&b.pid))),
             Sort::Oldest => sessions.sort_by(|a, b| a.since.cmp(&b.since).then(a.pid.cmp(&b.pid))),
+            // Whatever is closest to losing its cached context first, and everything already cold
+            // after it: there is nothing left to save there.
+            Sort::GoingCold => sessions.sort_by(|a, b| {
+                let left = |s: &Session| render::cold_in(s, now_ms, config.cache_window_mins);
+                match (left(a), left(b)) {
+                    (Some(a_left), Some(b_left)) => a_left.cmp(&b_left),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => b.since.cmp(&a.since),
+                }
+                .then(a.pid.cmp(&b.pid))
+            }),
         }
         sessions
     }
@@ -311,11 +323,11 @@ impl Sources {
 
 /// Sessions as the alert draws them. Every alert goes through here — real, test and demo — so a
 /// sample can never drift away from the real thing's appearance.
-fn alert_rows(sessions: &[Session], now_ms: u64) -> Vec<AlertRow> {
+fn alert_rows(sessions: &[Session], now_ms: u64, window_mins: u64) -> Vec<AlertRow> {
     sessions
         .iter()
         .map(|s| AlertRow {
-            text: render::alert_row(s, now_ms),
+            text: render::alert_row(s, now_ms, window_mins),
             pid: s.pid,
             deep_link: s.deep_link(),
             dot: icon::status_dot(s.status),
@@ -392,7 +404,10 @@ fn tick(
     theme::sync_menu_theme();
     let now = now_ms();
     let sessions = sources.collect(now, config);
-    let rows: Vec<MenuRow> = sessions.iter().map(|s| MenuRow::new(s, now)).collect();
+    let rows: Vec<MenuRow> = sessions
+        .iter()
+        .map(|s| MenuRow::new(s, now, config.cache_window_mins))
+        .collect();
 
     ui.apply(
         session::icon_state(&sessions),
@@ -412,7 +427,7 @@ fn tick(
         && let Some(popup) = popup
     {
         let owned: Vec<Session> = matching.into_iter().cloned().collect();
-        let lines = alert_rows(&owned, now);
+        let lines = alert_rows(&owned, now, config.cache_window_mins);
         popup.show(
             &render::alert_title(&owned),
             &lines,
@@ -434,7 +449,7 @@ fn show_test_alert(config: &Config, popup: Option<&Popup>) {
         let sessions = sample_sessions(now);
         popup.show(
             "Test alert",
-            &alert_rows(&sessions, now),
+            &alert_rows(&sessions, now, config.cache_window_mins),
             accent_for(&sessions),
             config.popup_secs,
             config.sound,
@@ -456,7 +471,7 @@ fn demo_alert() {
     if sessions.is_empty() {
         sessions = sample_sessions(now);
     }
-    let rows = alert_rows(&sessions, now);
+    let rows = alert_rows(&sessions, now, config.cache_window_mins);
 
     popup.show(
         &render::alert_title(&sessions),
@@ -569,7 +584,10 @@ fn main() {
     ui.apply(
         state,
         render::header(&sessions),
-        sessions.iter().map(|s| MenuRow::new(s, now)).collect(),
+        sessions
+        .iter()
+        .map(|s| MenuRow::new(s, now, config.cache_window_mins))
+        .collect(),
         render::tooltip(&sessions),
         config.max_list_rows as usize,
     );

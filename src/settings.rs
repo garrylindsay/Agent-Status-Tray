@@ -72,6 +72,7 @@ fn wide(text: &str) -> Vec<u16> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
     Sort,
+    Cache,
     ClaudePast,
     ListRows,
     Rows,
@@ -189,6 +190,15 @@ fn layout(config: &Config) -> Vec<Row> {
     );
     push(
         RowKind::Cycle {
+            label: "Context cache window".to_string(),
+            value: config::cache_label(config.cache_window_mins),
+        },
+        ROW_H,
+        Some(Action::Cycle(Field::Cache, 1)),
+        &mut y,
+    );
+    push(
+        RowKind::Cycle {
             label: "Menu shows at most".to_string(),
             value: format!("{} rows", config.max_list_rows),
         },
@@ -291,6 +301,9 @@ fn apply(action: Action, config: &mut Config) -> bool {
         Action::ToggleEnabled => config.notifications_enabled = !config.notifications_enabled,
         Action::ToggleStatus(status) => config.toggle_status(status),
         Action::Cycle(Field::Sort, dir) => config.sort = cycle(&Sort::ALL, config.sort, dir),
+        Action::Cycle(Field::Cache, dir) => {
+            config.cache_window_mins = cycle(&config::CACHE_CHOICES, config.cache_window_mins, dir)
+        }
         Action::Cycle(Field::ClaudePast, dir) => {
             config.claude_past_days = cycle(&config::PAST_CHOICES, config.claude_past_days, dir)
         }
@@ -898,11 +911,13 @@ mod tests {
         assert_eq!(config.sort, Sort::Recent);
         apply(Action::Cycle(Field::Sort, 1), &mut config);
         assert_eq!(config.sort, Sort::Oldest);
+        apply(Action::Cycle(Field::Sort, 1), &mut config);
+        assert_eq!(config.sort, Sort::GoingCold);
         // Wraps, and steps backwards.
         apply(Action::Cycle(Field::Sort, 1), &mut config);
         assert_eq!(config.sort, Sort::Attention);
         apply(Action::Cycle(Field::Sort, -1), &mut config);
-        assert_eq!(config.sort, Sort::Oldest);
+        assert_eq!(config.sort, Sort::GoingCold);
     }
 
     #[test]

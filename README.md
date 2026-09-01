@@ -135,15 +135,35 @@ things meant reopening the menu three times.
 | Alert sound | Notification | none, system beep, notification, asterisk, exclamation, critical stop, question |
 | Alert stays for | 8 seconds | until clicked, 5s, 8s, 15s, 30s |
 | Check sessions every | 1 second | 0.5s, 1s, 2s, 5s, 10s, 30s |
-| Sort rows by | Attention first | attention first, most recent, oldest |
+| Sort rows by | Attention first | attention first, most recent, oldest, going cold first |
 | Menu shows at most | 20 rows | 10, 15, 20, 30, 40, 50 |
 | Alert shows at most | 4 rows | 3, 4, 5, 6, 8, 12, 20, 50 |
-| Claude past chats | Last week | running only, last day, 3 days, week, month, 90 days |
+| Claude past chats | Last day | running only, last day, 3 days, week, month, 90 days |
+| Context cache window | 1 hour | off, 30 minutes, 1, 2, 4 hours |
 | Cursor local chats | Last week | cloud agents only, last day, 3 days, week, month, 90 days |
 
 Both row limits stop at 50 and there is no "all of them": with a month of Cursor chats listed that
 is sixty-odd rows, and a menu or an alert taller than the screen is neither. The alert is clamped to
 the work area on top of the setting, so it can never run off the screen whatever the number says.
+
+### Going cold
+
+Claude Code rows carry a countdown — `· cold in 37m`, then just `· cold`. Picking a session back up
+after its context has gone means the whole conversation is sent again: the transcripts on the
+machine this was built on show gaps of forty minutes and more costing a rewrite of six to seven
+hundred thousand tokens, against forty-odd thousand read back from cache.
+
+**The window is your figure, not one Claude Code publishes.** Nothing on disk says when a session's
+prompt cache expires, and the CLI has no idle-timeout or session-lifetime option at all — a session
+lives until its process ends, with no timer to count down against. So the countdown runs against
+the window you set, and the row says "cold in" rather than anything more certain. Set it to **off**
+if the guess is not worth having.
+
+Only Claude Code rows carry it. Cursor's cloud agents run on Cursor's own machines, and its local
+chats are finished, so neither has a conversation of yours sitting in a cache.
+
+**Going cold first** sorts by what is closest to losing its context, with everything already cold
+after it — there is nothing left to save there.
 
 **Attention first** puts what needs you at the top and, within a state, whatever has been stuck
 longest. **Most recent** and **oldest** ignore state and go purely by last activity. The order

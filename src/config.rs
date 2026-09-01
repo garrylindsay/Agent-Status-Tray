@@ -61,16 +61,24 @@ pub enum Sort {
     Recent,
     /// Oldest activity first.
     Oldest,
+    /// Whatever is closest to losing its cached context first.
+    GoingCold,
 }
 
 impl Sort {
-    pub const ALL: [Sort; 3] = [Sort::Attention, Sort::Recent, Sort::Oldest];
+    pub const ALL: [Sort; 4] = [
+        Sort::Attention,
+        Sort::Recent,
+        Sort::Oldest,
+        Sort::GoingCold,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Sort::Attention => "Attention first",
             Sort::Recent => "Most recent",
             Sort::Oldest => "Oldest",
+            Sort::GoingCold => "Going cold first",
         }
     }
 }
@@ -94,6 +102,24 @@ pub const POLL_CHOICES: [u64; 6] = [500, 1_000, 2_000, 5_000, 10_000, 30_000];
 
 /// How long a popup stays on screen, in seconds. `0` means "stay until clicked".
 pub const POPUP_CHOICES: [u64; 5] = [0, 5, 8, 15, 30];
+
+/// Minutes a session's context is assumed to stay cached. `0` turns the countdown off.
+///
+/// This is your figure, not one Claude Code publishes: nothing on disk says when a session's
+/// prompt cache expires. Transcripts here show a gap of forty minutes or more costing a rewrite of
+/// the whole conversation, so an hour is a reasonable starting guess — but it is a guess, and the
+/// row says "cold in" rather than anything more certain.
+pub const CACHE_CHOICES: [u64; 5] = [0, 30, 60, 120, 240];
+
+pub fn cache_label(mins: u64) -> String {
+    match mins {
+        0 => "Off".to_string(),
+        60 => "1 hour".to_string(),
+        120 => "2 hours".to_string(),
+        240 => "4 hours".to_string(),
+        n => format!("{n} minutes"),
+    }
+}
 
 /// Session rows the tray menu will show. Capped rather than unbounded: a menu of every chat you
 /// have ever had is unusable, and the sort puts what matters at the top anyway.
@@ -163,6 +189,9 @@ pub struct Config {
     /// How far back Claude conversations whose process has exited are listed, in days. `0` lists
     /// only sessions that are still running.
     pub claude_past_days: u64,
+    /// Minutes a session's context is assumed to stay cached, for the countdown on each row.
+    /// `0` leaves the countdown off.
+    pub cache_window_mins: u64,
 }
 
 impl Default for Config {
@@ -178,7 +207,8 @@ impl Default for Config {
             max_alert_rows: 4,
             cursor_local_days: 7,
             max_list_rows: 20,
-            claude_past_days: 7,
+            claude_past_days: 1,
+            cache_window_mins: 60,
         }
     }
 }
@@ -220,6 +250,9 @@ impl Config {
         }
         if self.claude_past_days != 0 {
             self.claude_past_days = self.claude_past_days.clamp(1, 365);
+        }
+        if self.cache_window_mins != 0 {
+            self.cache_window_mins = self.cache_window_mins.clamp(1, 1_440);
         }
         self.notify_statuses.retain(|s| NOTIFIABLE.contains(s));
         self.notify_statuses.dedup();

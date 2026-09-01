@@ -1,6 +1,6 @@
 //! Text for the menu rows and the hover tooltip.
 
-use crate::session::{Repo, Session, Status};
+use crate::session::{Provider, Repo, Session, Status};
 
 /// Windows caps `NOTIFYICONDATA.szTip` at 128 wide chars.
 const TOOLTIP_MAX: usize = 120;
@@ -37,14 +37,31 @@ fn escape_mnemonics(text: &str) -> String {
     text.replace('&', "&&")
 }
 
-/// One row: `api-gateway-f6 — WAITING 4m · permission prompt`
+/// Minutes left before a session's context is assumed to have gone cold, `None` once it has.
 ///
-/// The status dot is drawn rather than written, so it is not part of this text.
-///
-/// A session whose status was never reported gets `◌ name — up 4h36m` instead. Printing a `?`
-/// where a status belongs reads as a state the session is in, and the duration beside it is the
-/// session's age rather than the age of any status, so it is labelled as uptime and nothing is
-/// claimed about what the session is doing.
+/// Only Claude Code sessions carry this. Cursor's cloud agents run on Cursor's own machines and
+/// its local chats are finished, so neither has a conversation of yours sitting in a cache.
+pub fn cold_in(session: &Session, now_ms: u64, window_mins: u64) -> Option<u64> {
+    if window_mins == 0 || session.provider != Provider::ClaudeCode {
+        return None;
+    }
+    let elapsed_mins = now_ms.saturating_sub(session.since) / 60_000;
+    window_mins.checked_sub(elapsed_mins).filter(|left| *left > 0)
+}
+
+/// The countdown as it reads on a row.
+fn cold_text(session: &Session, now_ms: u64, window_mins: u64) -> Option<String> {
+    if window_mins == 0 || session.provider != Provider::ClaudeCode {
+        return None;
+    }
+    Some(match cold_in(session, now_ms, window_mins) {
+        Some(left) => format!("cold in {left}m"),
+        // Past the window the context is assumed gone, so picking the session back up pays for
+        // the whole conversation again.
+        None => "cold".to_string(),
+    })
+}
+
 /// Words for a repository state, for surfaces that cannot draw the mark.
 fn repo_text(repo: Repo) -> Option<&'static str> {
     match repo {
@@ -55,6 +72,14 @@ fn repo_text(repo: Repo) -> Option<&'static str> {
     }
 }
 
+/// One row: `api-gateway-f6 — WAITING 4m · permission prompt`
+///
+/// The status dot is drawn rather than written, so it is not part of this text.
+///
+/// A session whose status was never reported reads as `name — up 4h36m` instead. Printing a `?`
+/// where a status belongs reads as a state the session is in, and the duration beside it is the
+/// session's age rather than the age of any status, so it is labelled as uptime and nothing is
+/// claimed about what the session is doing.
 fn row_text(session: &Session, now_ms: u64) -> String {
     let age = elapsed(now_ms.saturating_sub(session.since));
     // Rows from different tools sit in one list, so each says which tool it came from.
@@ -86,8 +111,12 @@ fn row_text(session: &Session, now_ms: u64) -> String {
 ///
 /// A menu item can carry one icon and that is the status dot, so the repository state has to be
 /// said in words here rather than drawn.
-pub fn row(session: &Session, now_ms: u64) -> String {
+pub fn row(session: &Session, now_ms: u64, window_mins: u64) -> String {
     let mut text = row_text(session, now_ms);
+    if let Some(cold) = cold_text(session, now_ms, window_mins) {
+        text.push_str(" \u{00b7} ");
+        text.push_str(&cold);
+    }
     if let Some(repo) = repo_text(session.repo) {
         text.push_str(" \u{00b7} ");
         text.push_str(repo);
@@ -98,8 +127,13 @@ pub fn row(session: &Session, now_ms: u64) -> String {
 /// Row for the popup, which draws with `DT_NOPREFIX` and so wants the name verbatim.
 ///
 /// No repository words here: the popup draws the mark instead, and saying it twice is noise.
-pub fn alert_row(session: &Session, now_ms: u64) -> String {
-    row_text(session, now_ms)
+pub fn alert_row(session: &Session, now_ms: u64, window_mins: u64) -> String {
+    let mut text = row_text(session, now_ms);
+    if let Some(cold) = cold_text(session, now_ms, window_mins) {
+        text.push_str(" \u{00b7} ");
+        text.push_str(&cold);
+    }
+    text
 }
 
 /// Popup heading: names what is actually wanted from you, and only when that is actually known.
@@ -252,16 +286,45 @@ mod tests {
     fn only_the_menu_spells_out_the_repository_state() {
         let mut s = session("claude-tray-97", Status::Idle);
         s.repo = Repo::PrOpen;
-        assert!(row(&s, 0).contains("PR open"), "menu row: {}", row(&s, 0));
-        assert!(!alert_row(&s, 0).contains("PR open"));
+        assert!(row(&s, 0, 0).contains("PR open"), "menu row: {}", row(&s, 0, 0));
+        assert!(!alert_row(&s, 0, 0).contains("PR open"));
 
         s.repo = Repo::Nothing;
-        assert!(!row(&s, 0).contains("PR"));
+        assert!(!row(&s, 0, 0).contains("PR"));
     }
 
     #[test]
     fn ampersands_are_escaped_for_menus() {
-        assert!(row(&session("r&d-tool", Status::Idle), 0).contains("r&&d-tool"));
+        assert!(row(&session("r&d-tool", Status::Idle), 0, 0).contains("r&&d-tool"));
+    }
+
+    /// The countdown runs on the session's own last activity, and stops at zero.
+    #[test]
+    fn the_cache_countdown_counts_down() {
+        let s = session("claude-tray-25", Status::Idle);
+        assert_eq!(cold_in(&s, 10 * 60_000, 60), Some(50));
+        assert_eq!(cold_in(&s, 59 * 60_000, 60), Some(1));
+        assert_eq!(cold_in(&s, 60 * 60_000, 60), None);
+        assert_eq!(cold_in(&s, 999 * 60_000, 60), None);
+        // Off means off.
+        assert_eq!(cold_in(&s, 0, 0), None);
+    }
+
+    #[test]
+    fn a_session_past_the_window_reads_as_cold() {
+        let s = session("claude-tray-25", Status::Idle);
+        assert!(row(&s, 10 * 60_000, 60).contains("cold in 50m"));
+        assert!(row(&s, 90 * 60_000, 60).contains("\u{b7} cold"));
+        assert!(!row(&s, 90 * 60_000, 0).contains("cold"));
+    }
+
+    /// Cursor has no conversation of yours in a cache, so it never carries a countdown.
+    #[test]
+    fn only_claude_rows_count_down() {
+        let mut s = session("scale-fun-der", Status::Idle);
+        s.provider = Provider::Cursor;
+        assert_eq!(cold_in(&s, 10 * 60_000, 60), None);
+        assert!(!row(&s, 10 * 60_000, 60).contains("cold"));
     }
 
     /// A `?` where a status belongs reads as a state the session is in, and the duration beside
