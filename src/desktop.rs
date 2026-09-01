@@ -28,6 +28,7 @@ struct Record {
     last_activity_at: Option<u64>,
     is_archived: Option<bool>,
     title: Option<String>,
+    cwd: Option<String>,
     /// Branches this session wrote, whether or not a pull request came of them.
     written_branches: Option<Vec<String>>,
     prs: Option<Vec<Pr>>,
@@ -48,6 +49,7 @@ pub struct Info {
     pub last_activity_at: u64,
     pub archived: bool,
     pub title: Option<String>,
+    pub cwd: Option<String>,
     pub repo: Repo,
 }
 
@@ -82,6 +84,12 @@ impl Record {
         }
         Repo::Nothing
     }
+}
+
+/// Folder leaf for a path, which is what a row shows as its name.
+fn folder_leaf(path: &str) -> Option<String> {
+    let leaf = path.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next()?;
+    (!leaf.trim().is_empty()).then(|| leaf.to_string())
 }
 
 /// `%APPDATA%\Claude\claude-code-sessions`.
@@ -170,6 +178,7 @@ impl Desktop {
                     last_focused_at: record.last_focused_at.unwrap_or(0),
                     last_activity_at: record.last_activity_at.unwrap_or(0),
                     archived: record.is_archived.unwrap_or(false),
+                    cwd: record.cwd.clone(),
                     repo: record.repo(),
                     title: record
                         .title
@@ -183,6 +192,59 @@ impl Desktop {
 
     pub fn get(&self, cli_session_id: &str) -> Option<&Info> {
         self.by_cli.get(cli_session_id)
+    }
+
+    /// Conversations that are not running any more, within `days`.
+    ///
+    /// A Claude Code session leaves the registry the moment its process exits, but the
+    /// conversation does not go anywhere: it stays in the app's list, still unread, still wanting
+    /// a reply. Listing only live processes made those disappear from the tray while Cursor's
+    /// finished chats stayed — the same information, treated differently for no reason other than
+    /// where it happened to be stored.
+    pub fn past_sessions(
+        &self,
+        live: &[String],
+        days: u64,
+        now_ms: u64,
+        pid: u32,
+    ) -> Vec<crate::session::Session> {
+        use crate::session::{Provider, Session, Status};
+
+        if days == 0 {
+            return Vec::new();
+        }
+        let cutoff = now_ms.saturating_sub(days.saturating_mul(86_400_000));
+
+        self.by_cli
+            .iter()
+            .filter(|(cli, info)| {
+                !info.archived && info.last_activity_at >= cutoff && !live.iter().any(|l| l == *cli)
+            })
+            .map(|(cli, info)| Session {
+                provider: Provider::ClaudeCode,
+                // No process of its own any more, so clicking raises the app that holds it.
+                pid,
+                name: info
+                    .cwd
+                    .as_deref()
+                    .and_then(folder_leaf)
+                    .unwrap_or_else(|| "claude".to_string()),
+                cwd: info.cwd.clone().unwrap_or_default(),
+                title: info.title.clone(),
+                session_id: Some(cli.clone()),
+                entrypoint: Some("claude-desktop".to_string()),
+                desktop_session_id: Some(info.session_id.clone()),
+                repo: info.repo,
+                // Nothing is running, so the only thing left to say is whether it was read.
+                status: if info.unread() {
+                    Status::Unread
+                } else {
+                    Status::Idle
+                },
+                waiting_for: None,
+                since: info.last_activity_at,
+            })
+            .collect()
     }
 
     /// Fills in what the registry cannot say: the deep-link id, and the finished/unread state.
@@ -232,6 +294,7 @@ mod tests {
             last_activity_at: activity,
             archived: false,
             title: None,
+            cwd: None,
             repo: Repo::Nothing,
         }
     }
@@ -244,6 +307,7 @@ mod tests {
             last_activity_at: None,
             is_archived: None,
             title: None,
+            cwd: None,
             written_branches: Some(branches.iter().map(|b| b.to_string()).collect()),
             prs: Some(
                 states

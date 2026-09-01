@@ -72,6 +72,7 @@ fn wide(text: &str) -> Vec<u16> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
     Sort,
+    ClaudePast,
     ListRows,
     Rows,
     CursorLocal,
@@ -206,6 +207,15 @@ fn layout(config: &Config) -> Vec<Row> {
     );
     push(
         RowKind::Cycle {
+            label: "Claude past chats".to_string(),
+            value: config::past_label(config.claude_past_days),
+        },
+        ROW_H,
+        Some(Action::Cycle(Field::ClaudePast, 1)),
+        &mut y,
+    );
+    push(
+        RowKind::Cycle {
             label: "Cursor local chats".to_string(),
             value: config::cursor_local_label(config.cursor_local_days),
         },
@@ -281,6 +291,9 @@ fn apply(action: Action, config: &mut Config) -> bool {
         Action::ToggleEnabled => config.notifications_enabled = !config.notifications_enabled,
         Action::ToggleStatus(status) => config.toggle_status(status),
         Action::Cycle(Field::Sort, dir) => config.sort = cycle(&Sort::ALL, config.sort, dir),
+        Action::Cycle(Field::ClaudePast, dir) => {
+            config.claude_past_days = cycle(&config::PAST_CHOICES, config.claude_past_days, dir)
+        }
         Action::Cycle(Field::ListRows, dir) => {
             config.max_list_rows = cycle(&config::LIST_CHOICES, config.max_list_rows, dir)
         }
@@ -900,11 +913,14 @@ mod tests {
         assert!(!apply(Action::Cycle(Field::Sort, 1), &mut config));
         assert!(!apply(Action::Cycle(Field::Rows, 1), &mut config));
         assert!(!apply(Action::Cycle(Field::ListRows, 1), &mut config));
+        assert!(!apply(Action::Cycle(Field::ClaudePast, 1), &mut config));
     }
 
+    /// A 768-high screen has roughly 730px of work area, and the panel is anchored to the bottom
+    /// corner, so anything taller than this starts running off the top.
     #[test]
     fn the_panel_fits_on_a_modest_screen() {
         let height = panel_height(&layout(&Config::default()));
-        assert!(height < 600, "settings panel is {height}px tall");
+        assert!(height < 700, "settings panel is {height}px tall");
     }
 }

@@ -279,6 +279,17 @@ impl Sources {
         let live: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
         self.titles.retain(&live);
 
+        // Conversations whose process has exited: still in Claude's list, still possibly unread.
+        if config.claude_past_days > 0 {
+            let pid = activate::process_with_window("claude.exe").unwrap_or(0);
+            sessions.extend(self.desktop.past_sessions(
+                &live,
+                config.claude_past_days,
+                now_ms,
+                pid,
+            ));
+        }
+
         sessions.extend(self.cursor.sessions(now_ms, config.cursor_local_days));
 
         // Sorted across providers, not within each: a failed Cursor agent outranks an idle Claude

@@ -99,8 +99,21 @@ pub const POPUP_CHOICES: [u64; 5] = [0, 5, 8, 15, 30];
 /// have ever had is unusable, and the sort puts what matters at the top anyway.
 pub const LIST_CHOICES: [u64; 6] = [10, 15, 20, 30, 40, 50];
 
-/// How far back local Cursor chats are listed, in days. `0` leaves them out.
+/// How far back chats that are not running are listed, in days. `0` leaves them out.
 pub const CURSOR_LOCAL_CHOICES: [u64; 6] = [0, 1, 3, 7, 30, 90];
+
+/// Same windows for Claude conversations whose process has exited.
+pub const PAST_CHOICES: [u64; 6] = [0, 1, 3, 7, 30, 90];
+
+pub fn past_label(days: u64) -> String {
+    match days {
+        0 => "Running only".to_string(),
+        1 => "Last day".to_string(),
+        7 => "Last week".to_string(),
+        30 => "Last month".to_string(),
+        n => format!("Last {n} days"),
+    }
+}
 
 pub fn cursor_local_label(days: u64) -> String {
     match days {
@@ -147,6 +160,9 @@ pub struct Config {
     pub cursor_local_days: u64,
     /// Session rows the tray menu shows before collapsing the rest into "+N more".
     pub max_list_rows: u64,
+    /// How far back Claude conversations whose process has exited are listed, in days. `0` lists
+    /// only sessions that are still running.
+    pub claude_past_days: u64,
 }
 
 impl Default for Config {
@@ -162,6 +178,7 @@ impl Default for Config {
             max_alert_rows: 4,
             cursor_local_days: 7,
             max_list_rows: 20,
+            claude_past_days: 7,
         }
     }
 }
@@ -197,9 +214,12 @@ impl Config {
         self.max_alert_rows = self.max_alert_rows.clamp(1, 50);
         // Fifty is the ceiling: past that the menu is taller than the screen and unusable.
         self.max_list_rows = self.max_list_rows.clamp(5, 50);
-        // Local chats have no live state, so a long window is all cost and no news.
+        // Neither of these has a live state, so a long window is all cost and no news.
         if self.cursor_local_days != 0 {
             self.cursor_local_days = self.cursor_local_days.clamp(1, 365);
+        }
+        if self.claude_past_days != 0 {
+            self.claude_past_days = self.claude_past_days.clamp(1, 365);
         }
         self.notify_statuses.retain(|s| NOTIFIABLE.contains(s));
         self.notify_statuses.dedup();

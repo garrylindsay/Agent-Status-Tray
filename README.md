@@ -16,9 +16,15 @@ Cursor's store is opened read-only.
 
 ## Where sessions come from
 
+A Claude Code session leaves the registry the moment its process exits, but the conversation does
+not go anywhere: it stays in the app's list, still unread, still wanting a reply. Those are listed
+from the desktop app's own records, within a recent window, so a chat that is waiting on you does
+not vanish from the tray just because its process has ended.
+
 | Tool | Source | What it can say |
 | --- | --- | --- |
-| Claude Code | the session registry, the transcript, and the desktop app's own record | waiting, busy, finished-unread, finished |
+| Claude Code, running | the session registry, the transcript, and the desktop app's own record | waiting, busy, finished-unread, finished |
+| Claude Code, ended | the desktop app's records alone | finished-unread, finished |
 | Cursor cloud agents | `state.vscdb`, key `cloudAgentRepository.agents.*` | running, finished-unread, finished, failed |
 | Cursor local chats | `conversation-search.db`, `composerData:<id>`, and the local-agent project map | finished |
 
@@ -132,6 +138,7 @@ things meant reopening the menu three times.
 | Sort rows by | Attention first | attention first, most recent, oldest |
 | Menu shows at most | 20 rows | 10, 15, 20, 30, 40, 50 |
 | Alert shows at most | 4 rows | 3, 4, 5, 6, 8, 12, 20, 50 |
+| Claude past chats | Last week | running only, last day, 3 days, week, month, 90 days |
 | Cursor local chats | Last week | cloud agents only, last day, 3 days, week, month, 90 days |
 
 Both row limits stop at 50 and there is no "all of them": with a month of Cursor chats listed that
