@@ -95,13 +95,13 @@ below, where a permission prompt pulls `api-gateway-f6` to the top of the list.
 
 ## Desktop alerts
 
-A tray icon only helps while you are looking at it. For the times you are not, claude-tray can
+A tray icon only helps while you are looking at it. For the times you are not, the tray can
 raise an Outlook-style alert in the corner of the screen while any session sits in a status you
 asked to be told about, and repeat it on a schedule until you deal with it.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ 2 Claude sessions are waiting on you                             │
+│ 2 sessions are waiting on you                                    │
 │ ● api-gateway-f6 · Rate limiting rollout — WAITING 4m · permission prompt
 │ ● claude-tray-97 · Claude-tray repo setup — WAITING 38s · input needed
 └──────────────────────────────────────────────────────────────────┘
@@ -117,83 +117,6 @@ transcript for that session — `%USERPROFILE%\.claude\projects\<encoded cwd>\<s
 preferring a title you set (`custom-title`) over a generated one (`ai-title`). Transcripts run to
 megabytes and grow constantly, so only the last 256KB is searched, and only when the file has
 changed since it was last read.
-
-Everything is configured from **Settings…** in the tray menu, which opens a panel that stays put
-while you work through it. Changes apply and are written to disk the moment you click them, so
-nothing is lost on a reboot. Tick boxes toggle; the `‹ value ›` rows step through their choices —
-click the row (or `›`) for the next value, `‹` for the previous. The panel closes when the pointer
-leaves it, or on Esc.
-
-Settings deliberately are not menu items: a Win32 menu closes on every click, so changing three
-things meant reopening the menu three times.
-
-| Setting | Default | Choices |
-| --- | --- | --- |
-| Show desktop alerts | on | on / off |
-| Alert me about | Waiting on you | any of waiting, failed, busy, shell, finished-unread, finished, unknown |
-| Repeat alert | Every minute | only once, 30s, 1m, 2m, 5m, 10m, 15m, 30m |
-| Alert sound | Notification | none, system beep, notification, asterisk, exclamation, critical stop, question |
-| Alert stays for | 8 seconds | until clicked, 5s, 8s, 15s, 30s |
-| Check sessions every | 1 second | 0.5s, 1s, 2s, 5s, 10s, 30s |
-| Sort rows by | Attention first | attention first, most recent, oldest, going cold first |
-| Menu shows at most | 20 rows | 10, 15, 20, 30, 40, 50 |
-| Alert shows at most | 4 rows | 3, 4, 5, 6, 8, 12, 20, 50 |
-| Claude past chats | Last day | running only, last day, 3 days, week, month, 90 days |
-| Context cache window | 1 hour | off, 30 minutes, 1, 2, 4 hours |
-| Cursor local chats | Last week | cloud agents only, last day, 3 days, week, month, 90 days |
-
-Both row limits stop at 50 and there is no "all of them": with a month of Cursor chats listed that
-is sixty-odd rows, and a menu or an alert taller than the screen is neither. The alert is clamped to
-the work area on top of the setting, so it can never run off the screen whatever the number says.
-
-### Going cold
-
-Claude Code rows carry a countdown — `· cold in 37m`, then just `· cold`. Picking a session back up
-after its context has gone means the whole conversation is sent again: the transcripts on the
-machine this was built on show gaps of forty minutes and more costing a rewrite of six to seven
-hundred thousand tokens, against forty-odd thousand read back from cache.
-
-**The window is your figure, not one Claude Code publishes.** Nothing on disk says when a session's
-prompt cache expires, and the CLI has no idle-timeout or session-lifetime option at all — a session
-lives until its process ends, with no timer to count down against. So the countdown runs against
-the window you set, and the row says "cold in" rather than anything more certain. Set it to **off**
-if the guess is not worth having.
-
-Only Claude Code rows carry it. Cursor's cloud agents run on Cursor's own machines, and its local
-chats are finished, so neither has a conversation of yours sitting in a cache.
-
-Launching the program while it is already running does nothing: it takes a named mutex and exits if
-one is already held, because two tray icons for the same thing can only be sorted out from Task
-Manager. The `--demo-` modes are not covered by it, so they still run alongside the real one.
-
-The countdown is coloured by how much is left, so a glance is enough:
-
-```
-> 30 min   green
-> 10 min   amber
->  5 min   red
-<= 5 min   red, flashing
-cold       the row's own colour; nothing left to save
-```
-
-The flash alternates with the row's own colour rather than blanking, so nothing on the row moves as
-it blinks, and its timer runs only while a row is actually in its last minutes.
-
-Only the alert is coloured. The tray menu is a native Win32 menu whose item text is drawn by the
-shell in one colour, so the countdown is there in words but not in colour.
-
-**Going cold first** sorts by what is closest to losing its context, with everything already cold
-after it — there is nothing left to save there.
-
-**Attention first** puts what needs you at the top and, within a state, whatever has been stuck
-longest. **Most recent** and **oldest** ignore state and go purely by last activity. The order
-applies to the tray menu and to alerts alike, so it also decides which rows survive the row limit.
-
-Settings live in `%APPDATA%\claude-tray\config.json`, written with defaults on first run so there
-is something to hand-edit. A leading byte-order mark is ignored on load — Notepad and PowerShell's
-`Set-Content -Encoding utf8` both write one, and JSON has no place for it, so without that every
-setting in the file would silently revert to its default. Picking a sound plays it, so you can hear what you are choosing, and
-**Test alert now** shows a sample alert without waiting for a session to block.
 
 The alert repeats on the interval for as long as a session stays in a watched status. A session
 that *newly* enters one interrupts that schedule and alerts immediately, so a fresh permission
@@ -211,6 +134,126 @@ terminal you are typing in. It is a plain Win32 window rather than a WinRT toast
 toast needs a registered AppUserModelID and a Start-menu shortcut, and Focus Assist and the
 per-app notification switches can silently suppress it — the wrong behaviour for something whose
 whole job is to be seen.
+
+## Settings
+
+Everything is configured from **Settings…** in the tray menu, which opens a panel that stays put
+while you work through it. Changes apply and are written to disk the moment you click them, so
+nothing is lost on a reboot. Tick boxes toggle; the `‹ value ›` rows step through their choices —
+click the row (or `›`) for the next value, `‹` for the previous. The panel closes when the pointer
+leaves it, or on Esc.
+
+Settings deliberately are not menu items: a Win32 menu closes on every click, so changing three
+things meant reopening the menu three times.
+
+### Every setting
+
+Grouped as the panel groups them. Each writes to disk the moment you click it.
+
+#### Show desktop alerts
+
+**On.** The master switch. Off keeps the tray icon, the menu and the session list working, and
+stops any alert appearing. Everything below still applies to what the menu shows.
+
+#### Alert me about
+
+Which states raise an alert. **Waiting on you** only, by default. Tick as many as you like; the dot
+beside each is the one you will see on the row, so a state can be matched by eye.
+
+| State | Dot | Means |
+| --- | --- | --- |
+| Waiting on you | amber, filled | Claude Code says it is blocked on a permission prompt or a question |
+| Failed | red, filled | a Cursor cloud agent ended in error |
+| Busy | grey, filled | working |
+| Running a shell command | grey, filled | working, in a shell |
+| Finished, not looked at | blue, filled | something happened since you last opened it |
+| Finished | grey, hollow | ended, and you have seen it |
+| Unknown / not reported | grey, hollow | the tool said nothing about this one |
+
+**Finished, not looked at** is the useful one to add if you leave sessions running and come back to
+them. **Finished** and **Unknown** will alert about nearly everything, so they are mostly for
+seeing what the tray can see at all.
+
+#### Session list
+
+**Sort rows by** — *Attention first.*
+- *Attention first* — what needs you at the top, and within a state whatever has been stuck
+  longest. Failures and prompts outrank work in progress, which outranks anything finished.
+- *Most recent* / *Oldest* — ignore state entirely and go purely by last activity.
+- *Going cold first* — whatever is closest to losing its cached context, with everything already
+  cold after it. Pairs with the countdown below.
+
+The order also decides which rows survive the two row limits, so it is not only cosmetic.
+
+**Context cache window** — *1 hour.* How long a Claude Code session's context is assumed to stay
+cached, which drives the `cold in 37m` countdown and the *Going cold first* order. **This is your
+figure, not one Claude Code publishes** — see [Going cold](#going-cold). Shorten it if you find
+sessions going cold sooner than the countdown suggests; set it to **off** if the guess is not worth
+having.
+
+**Menu shows at most** — *20 rows.* The rest collapse into a `+N more` line. The ceiling is 50: a
+menu longer than the screen cannot be used.
+
+**Alert shows at most** — *4 rows.* Same idea for the alert, which also never grows past the work
+area whatever this says. Four keeps an alert glanceable; raise it if you would rather see the whole
+picture each time.
+
+**Claude past chats** — *Last day.* Claude Code drops a session from its registry the moment the
+process exits, but the conversation stays in the app, still unread and still wanting a reply. This
+lists those, going back the chosen number of days. *Running only* lists nothing but live processes.
+Raise it if you work across many conversations and come back to them; lower it if old chats crowd
+out the live ones.
+
+**Cursor local chats** — *Last week.* Cursor's ordinary (non-cloud) chats, going back the chosen
+number of days. *Cloud agents only* leaves them out. These never report a live state, so they
+always read as finished — the window is what keeps hundreds of them from burying the agents that do
+say something.
+
+#### Timing and sound
+
+**Repeat alert** — *Every minute.* How often an alert comes back while a session is still in a state
+you asked about. *Only once* alerts and then stays quiet until the set of sessions changes. A newly
+matching session always interrupts the schedule, so a fresh prompt never waits out the remainder of
+an interval.
+
+**Alert sound** — *Notification.* Played with each alert, and again when you pick one here so you
+can hear it. These are Windows event sounds, so they follow whatever sound scheme is set. *No sound*
+makes alerts silent.
+
+**Alert stays for** — *8 seconds.* How long an alert stays before it dismisses itself. *Until
+clicked* leaves it up. Hovering it holds it open regardless, so it cannot expire on the way to a
+click.
+
+**Check sessions every** — *1 second.* How often each tool's files are re-read. Lower is more
+responsive; higher costs less. Little of the work actually repeats at this rate — transcripts and
+records are only re-read when they change, and Cursor's store no more than every few seconds — so
+1 second is cheap.
+
+**Test alert now** shows a sample alert, so the look, the sound and the position can be checked
+without waiting for a session to do anything.
+
+### The file
+
+Settings live in `%APPDATA%\claude-tray\config.json`, written with defaults on first run so there is
+something to hand-edit. A leading byte-order mark is ignored on load — Notepad and PowerShell's
+`Set-Content -Encoding utf8` both write one, and JSON has no place for it, so without that every
+setting in the file would silently revert to its default. Values outside sensible bounds are clamped
+rather than honoured.
+
+| Key | Setting |
+| --- | --- |
+| `notificationsEnabled` | Show desktop alerts |
+| `notifyStatuses` | Alert me about |
+| `sort` | Sort rows by |
+| `cacheWindowMins` | Context cache window |
+| `maxListRows` | Menu shows at most |
+| `maxAlertRows` | Alert shows at most |
+| `claudePastDays` | Claude past chats |
+| `cursorLocalDays` | Cursor local chats |
+| `repeatSecs` | Repeat alert |
+| `sound` | Alert sound |
+| `popupSecs` | Alert stays for |
+| `pollMs` | Check sessions every |
 
 The tray menu follows the system theme too. A Win32 menu is drawn by the shell and always uses the
 light scheme unless the process opts in through two uxtheme entry points that exist only as
@@ -230,6 +273,49 @@ To see either without going through the tray:
 .\target\release\agent-status-tray.exe --demo-alert
 .\target\release\agent-status-tray.exe --demo-settings
 ```
+
+## Going cold
+
+Claude Code rows carry a countdown — `cold in 37m`, then just `cold`. Picking a session back up
+after its context has gone means the whole conversation is sent again. The transcripts on the
+machine this was built against show exactly that, for this very repository's session:
+
+```
+2026-08-31 22:47   cache_write 610,119   cache_read 42,082   gap   41 min
+2026-09-01 17:02   cache_write 663,059   cache_read 42,082   gap 1077 min
+2026-09-01 18:12   cache_write 706,952   cache_read 42,082   gap   58 min
+```
+
+Warm, a turn costs `input_tokens: 2` with two hundred thousand served from cache. Cold, it rewrites
+six to seven hundred thousand while reading back only the same forty-odd thousand.
+
+**The window is your figure, not one Claude Code publishes.** Nothing on disk says when a session's
+prompt cache expires, and the CLI has no idle-timeout or session-lifetime option at all — a session
+lives until its process ends, with no timer to count down against. So the countdown runs against
+the **Context cache window** you set, and the row says "cold in" rather than anything more certain.
+A forty-minute gap was already enough above, so an hour may be optimistic.
+
+The countdown is coloured by how much is left, so a glance is enough:
+
+```
+> 30 min   green
+> 10 min   amber
+>  5 min   red
+<= 5 min   red, flashing
+cold       the row's own colour; nothing left to save
+```
+
+The flash alternates with the row's own colour rather than blanking, so nothing on the row moves as
+it blinks, and its timer runs only while a row is actually in its last minutes.
+
+Only the alert is coloured. The tray menu is a native Win32 menu whose item text is drawn by the
+shell in one colour, so the countdown is there in words but not in colour. And only Claude Code
+rows carry it at all: Cursor's cloud agents run on Cursor's own machines and its local chats are
+finished, so neither has a conversation of yours sitting in a cache.
+
+Launching the program while it is already running does nothing: it takes a named mutex and exits if
+one is already held, because two tray icons for the same thing can only be sorted out from Task
+Manager. The `--demo-` modes are not covered by it, so they still run alongside the real one.
 
 ## What the desktop app knows
 
