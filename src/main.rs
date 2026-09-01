@@ -27,6 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tray_icon::menu::{IconMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, KillTimer, MSG, PostQuitMessage, SetTimer, TranslateMessage,
     WM_TIMER,
@@ -532,6 +533,32 @@ fn demo_settings() {
     }
 }
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    /// Not re-exported by `windows-sys` 0.61 under the features this crate enables.
+    fn CreateMutexW(
+        attributes: *const std::ffi::c_void,
+        initial_owner: i32,
+        name: *const u16,
+    ) -> *mut std::ffi::c_void;
+}
+
+/// Refuses to start when a copy is already running.
+///
+/// Two tray icons for the same thing is a bug you can only fix from Task Manager, and it is easy
+/// to end up with: the exe is a normal program, and nothing stops it being launched twice. The
+/// mutex is deliberately not released — it lives for the life of the process and Windows drops it
+/// on exit, which is exactly the lifetime wanted.
+fn already_running() -> bool {
+    const NAME: &str = r"Local\agent-status-tray-single-instance";
+    let name: Vec<u16> = NAME.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let handle = CreateMutexW(ptr::null(), 1, name.as_ptr());
+        // A handle still comes back when the mutex already existed, so the error is the answer.
+        handle.is_null() || GetLastError() == ERROR_ALREADY_EXISTS
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--demo-alert") {
         demo_alert();
@@ -548,6 +575,11 @@ fn main() {
     // than only appearing once a setting is changed.
     if config_missing {
         config.save();
+    }
+
+    // A second copy would put a second icon in the tray, and neither would be the "real" one.
+    if already_running() {
+        return;
     }
 
     // Before the first menu is built: the theme has to be set for a menu to be created dark.

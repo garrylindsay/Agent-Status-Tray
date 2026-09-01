@@ -162,6 +162,10 @@ if the guess is not worth having.
 Only Claude Code rows carry it. Cursor's cloud agents run on Cursor's own machines, and its local
 chats are finished, so neither has a conversation of yours sitting in a cache.
 
+Launching the program while it is already running does nothing: it takes a named mutex and exits if
+one is already held, because two tray icons for the same thing can only be sorted out from Task
+Manager. The `--demo-` modes are not covered by it, so they still run alongside the real one.
+
 The countdown is coloured by how much is left, so a glance is enough:
 
 ```
@@ -311,6 +315,11 @@ $s.Save()
   messaging pipe instead). Where that is the case every session reads as `Unknown`, the icon stays
   a gray ring with a live count, and the waiting/busy colours never appear. Alerts still work —
   tick **Unknown / not reported** under Settings → Alert me about.
+- The blue "finished, not looked at" dot cannot be narrowed to Claude's amber "waiting on you".
+  The app decides that with `!isArchived && pendingToolPermissions.length > 0`, and
+  `pendingToolPermissions` is held in memory: it appears in none of the session records on disk.
+  A session with a permission prompt open therefore shows here as unread, which is true but less
+  specific than what the app shows. Narrowing it would mean the messaging pipe again.
 - Clicking a session row raises the window *hosting* that session, not the session itself. A
   session is a console process with no window of its own, so the row walks up the process tree to
   the first real top-level window — the Claude desktop app, Windows Terminal, a console host.
