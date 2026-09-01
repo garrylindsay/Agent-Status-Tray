@@ -49,17 +49,55 @@ pub fn cold_in(session: &Session, now_ms: u64, window_mins: u64) -> Option<u64> 
     window_mins.checked_sub(elapsed_mins).filter(|left| *left > 0)
 }
 
-/// The countdown as it reads on a row.
-fn cold_text(session: &Session, now_ms: u64, window_mins: u64) -> Option<String> {
+/// How close a session is to losing its context, which is what colours the countdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cold {
+    /// More than half an hour left.
+    Fresh,
+    /// Half an hour down to ten minutes.
+    Soon,
+    /// Ten minutes down to five.
+    Urgent,
+    /// The last five minutes. Drawn flashing.
+    Critical,
+    /// Already gone; nothing left to save.
+    Gone,
+}
+
+impl Cold {
+    fn of(left: Option<u64>) -> Cold {
+        match left {
+            None => Cold::Gone,
+            Some(mins) if mins > 30 => Cold::Fresh,
+            Some(mins) if mins > 10 => Cold::Soon,
+            Some(mins) if mins > 5 => Cold::Urgent,
+            Some(_) => Cold::Critical,
+        }
+    }
+
+    /// Only the last few minutes are worth taking your eye off something else for.
+    pub fn flashes(self) -> bool {
+        self == Cold::Critical
+    }
+}
+
+/// The countdown as it reads on a row, and how urgent it is.
+pub fn cold_state(session: &Session, now_ms: u64, window_mins: u64) -> Option<(String, Cold)> {
     if window_mins == 0 || session.provider != Provider::ClaudeCode {
         return None;
     }
-    Some(match cold_in(session, now_ms, window_mins) {
-        Some(left) => format!("cold in {left}m"),
+    let left = cold_in(session, now_ms, window_mins);
+    let text = match left {
+        Some(mins) => format!("cold in {mins}m"),
         // Past the window the context is assumed gone, so picking the session back up pays for
         // the whole conversation again.
         None => "cold".to_string(),
-    })
+    };
+    Some((text, Cold::of(left)))
+}
+
+fn cold_text(session: &Session, now_ms: u64, window_mins: u64) -> Option<String> {
+    cold_state(session, now_ms, window_mins).map(|(text, _)| text)
 }
 
 /// Words for a repository state, for surfaces that cannot draw the mark.
@@ -126,14 +164,10 @@ pub fn row(session: &Session, now_ms: u64, window_mins: u64) -> String {
 
 /// Row for the popup, which draws with `DT_NOPREFIX` and so wants the name verbatim.
 ///
-/// No repository words here: the popup draws the mark instead, and saying it twice is noise.
-pub fn alert_row(session: &Session, now_ms: u64, window_mins: u64) -> String {
-    let mut text = row_text(session, now_ms);
-    if let Some(cold) = cold_text(session, now_ms, window_mins) {
-        text.push_str(" \u{00b7} ");
-        text.push_str(&cold);
-    }
-    text
+/// Neither the repository state nor the countdown is in here: the popup draws both itself, the
+/// mark as a shape and the countdown in a colour that says how urgent it is.
+pub fn alert_row(session: &Session, now_ms: u64) -> String {
+    row_text(session, now_ms)
 }
 
 /// Popup heading: names what is actually wanted from you, and only when that is actually known.
@@ -287,7 +321,7 @@ mod tests {
         let mut s = session("claude-tray-97", Status::Idle);
         s.repo = Repo::PrOpen;
         assert!(row(&s, 0, 0).contains("PR open"), "menu row: {}", row(&s, 0, 0));
-        assert!(!alert_row(&s, 0, 0).contains("PR open"));
+        assert!(!alert_row(&s, 0).contains("PR open"));
 
         s.repo = Repo::Nothing;
         assert!(!row(&s, 0, 0).contains("PR"));
@@ -308,6 +342,30 @@ mod tests {
         assert_eq!(cold_in(&s, 999 * 60_000, 60), None);
         // Off means off.
         assert_eq!(cold_in(&s, 0, 0), None);
+    }
+
+    /// The bands are what turn a number into a colour, so they are worth pinning exactly.
+    #[test]
+    fn the_countdown_bands_are_where_they_are_said_to_be() {
+        let s = session("claude-tray-25", Status::Idle);
+        let at = |mins: u64| cold_state(&s, mins * 60_000, 60).unwrap().1;
+        assert_eq!(at(0), Cold::Fresh); // 60 left
+        assert_eq!(at(29), Cold::Fresh); // 31 left
+        assert_eq!(at(30), Cold::Soon); // 30 left
+        assert_eq!(at(49), Cold::Soon); // 11 left
+        assert_eq!(at(50), Cold::Urgent); // 10 left
+        assert_eq!(at(54), Cold::Urgent); // 6 left
+        assert_eq!(at(55), Cold::Critical); // 5 left
+        assert_eq!(at(59), Cold::Critical); // 1 left
+        assert_eq!(at(60), Cold::Gone);
+        assert_eq!(at(600), Cold::Gone);
+    }
+
+    #[test]
+    fn only_the_last_few_minutes_flash() {
+        assert!(Cold::Critical.flashes());
+        assert!(!Cold::Urgent.flashes());
+        assert!(!Cold::Gone.flashes());
     }
 
     #[test]

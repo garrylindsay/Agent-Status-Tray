@@ -162,6 +162,22 @@ if the guess is not worth having.
 Only Claude Code rows carry it. Cursor's cloud agents run on Cursor's own machines, and its local
 chats are finished, so neither has a conversation of yours sitting in a cache.
 
+The countdown is coloured by how much is left, so a glance is enough:
+
+```
+> 30 min   green
+> 10 min   amber
+>  5 min   red
+<= 5 min   red, flashing
+cold       the row's own colour; nothing left to save
+```
+
+The flash alternates with the row's own colour rather than blanking, so nothing on the row moves as
+it blinks, and its timer runs only while a row is actually in its last minutes.
+
+Only the alert is coloured. The tray menu is a native Win32 menu whose item text is drawn by the
+shell in one colour, so the countdown is there in words but not in colour.
+
 **Going cold first** sorts by what is closest to losing its context, with everything already cold
 after it — there is nothing left to save there.
 

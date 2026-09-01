@@ -33,6 +33,9 @@ use crate::theme::Palette;
 /// Timer that dismisses the popup. Scoped to the popup window, so it cannot collide with the
 /// null-hwnd poll timer in `main`.
 const DISMISS_TIMER: usize = 1;
+/// Repaints the countdowns that flash. Only runs while at least one row is in its last minutes.
+const FLASH_TIMER: usize = 3;
+const FLASH_MS: u32 = 500;
 
 /// The card sizes itself to its longest row so a conversation title is shown in full, within
 /// these bounds. Narrower than the minimum looks stunted; wider than the maximum stops being a
@@ -54,6 +57,7 @@ const DT_VCENTER: u32 = 0x0004;
 const DT_END_ELLIPSIS: u32 = 0x8000;
 /// Session names can contain `&`, which DrawText would otherwise eat as a mnemonic.
 const DT_NOPREFIX: u32 = 0x0800;
+const DT_RIGHT: u32 = 0x0002;
 
 // PlaySound flags.
 const SND_ASYNC: u32 = 0x0001;
@@ -95,6 +99,8 @@ pub struct AlertRow {
     pub dot: ([u8; 4], bool),
     /// Branch or pull-request mark drawn after the dot, where the tool records one.
     pub repo: crate::session::Repo,
+    /// Countdown to this session's context going cold, drawn in a colour of its own.
+    pub cold: Option<(String, crate::render::Cold)>,
 }
 
 /// What the window paints on its next `WM_PAINT`.
@@ -108,6 +114,8 @@ struct Content {
     hover: Option<usize>,
     /// Kept so hovering can restart the dismiss timer with the configured duration.
     duration_secs: u64,
+    /// Which half of the flash the critical countdowns are currently in.
+    flash_on: bool,
     /// System colours, sampled when the alert is shown.
     palette: Option<Palette>,
     /// Width this content was measured for.
@@ -161,7 +169,13 @@ unsafe fn measure_width(hwnd: HWND, title: &str, rows: &[AlertRow], overflow: us
 
         SelectObject(hdc, body_font as _);
         for row in rows {
-            widest = widest.max(text_width(hdc, &row.text) + DOT_COLUMN + repo_indent(row.repo));
+            let cold = row
+                .cold
+                .as_ref()
+                .map(|(text, _)| text_width(hdc, text) + 12)
+                .unwrap_or(0);
+            widest = widest
+                .max(text_width(hdc, &row.text) + DOT_COLUMN + repo_indent(row.repo) + cold);
         }
         if overflow > 0 {
             widest = widest.max(text_width(hdc, &format!("+{overflow} more")) + DOT_COLUMN);
@@ -400,6 +414,7 @@ impl Popup {
                 accent,
                 hover: None,
                 duration_secs,
+                flash_on: true,
                 palette: Some(Palette::current()),
                 width,
             };
@@ -432,6 +447,14 @@ impl Popup {
             if duration_secs > 0 {
                 SetTimer(self.hwnd, DISMISS_TIMER, (duration_secs * 1000) as u32, None);
             }
+
+            KillTimer(self.hwnd, FLASH_TIMER);
+            if shown
+                .iter()
+                .any(|row| row.cold.as_ref().is_some_and(|(_, cold)| cold.flashes()))
+            {
+                SetTimer(self.hwnd, FLASH_TIMER, FLASH_MS, None);
+            }
         }
 
         play(sound);
@@ -439,6 +462,7 @@ impl Popup {
 
     pub fn hide(&self) {
         unsafe {
+            KillTimer(self.hwnd, FLASH_TIMER);
             KillTimer(self.hwnd, DISMISS_TIMER);
             ShowWindow(self.hwnd, SW_HIDE);
         }
@@ -495,6 +519,7 @@ unsafe extern "system" fn wnd_proc(
             // A click on a session row raises that session's window; anywhere else just dismisses,
             // as an Outlook alert does.
             WM_LBUTTONDOWN => {
+                KillTimer(hwnd, FLASH_TIMER);
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
                 let target = CONTENT.with(|c| {
                     let content = c.borrow();
@@ -542,6 +567,15 @@ unsafe extern "system" fn wnd_proc(
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
             }
+            WM_TIMER if wparam == FLASH_TIMER => {
+                CONTENT.with(|c| {
+                    let mut content = c.borrow_mut();
+                    content.flash_on = !content.flash_on;
+                });
+                InvalidateRect(hwnd, ptr::null(), 0);
+                0
+            }
+
             WM_TIMER if wparam == DISMISS_TIMER => {
                 KillTimer(hwnd, DISMISS_TIMER);
                 ShowWindow(hwnd, SW_HIDE);
@@ -629,11 +663,19 @@ unsafe fn paint(hwnd: HWND) {
             draw_dot(hdc, ACCENT_W + PAD + 5, middle, row.dot);
             draw_repo(hdc, ACCENT_W + PAD + DOT_COLUMN + 6, middle, row.repo);
 
+            // The countdown is drawn separately, right-aligned and in a colour of its own, so
+            // the row text is given only the space left over.
+            let cold_width = row
+                .cold
+                .as_ref()
+                .map(|(text, _)| text_width(hdc, text) + 12)
+                .unwrap_or(0);
+
             SetTextColor(hdc, palette.text);
             let mut r = RECT {
                 left: ACCENT_W + PAD + DOT_COLUMN + repo_indent(row.repo),
                 top: y,
-                right: width - PAD,
+                right: width - PAD - cold_width,
                 bottom: y + ROW_H,
             };
             let mut t = wide(&row.text);
@@ -644,6 +686,31 @@ unsafe fn paint(hwnd: HWND) {
                 &mut r,
                 DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
             );
+
+            if let Some((text, cold)) = &row.cold {
+                // A flashing countdown alternates with the row's own colour rather than vanishing,
+                // so nothing on the row moves as it blinks.
+                let color = match crate::icon::cold_color(*cold) {
+                    Some(_) if cold.flashes() && !content.flash_on => palette.dim,
+                    Some([cr, cg, cb, _]) => rgb(cr, cg, cb),
+                    None => palette.dim,
+                };
+                SetTextColor(hdc, color);
+                let mut cold_rect = RECT {
+                    left: width - PAD - cold_width,
+                    top: y,
+                    right: width - PAD,
+                    bottom: y + ROW_H,
+                };
+                let mut ct = wide(text);
+                DrawTextW(
+                    hdc,
+                    ct.as_mut_ptr(),
+                    -1,
+                    &mut cold_rect,
+                    DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX,
+                );
+            }
             y += ROW_H;
         }
 

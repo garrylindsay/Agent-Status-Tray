@@ -2,6 +2,7 @@
 //!
 //! 32x32 RGBA, rendered from scratch so there are no image assets or font dependencies.
 
+use crate::render::Cold;
 use crate::session::{IconKind, IconState, Repo, Status};
 
 const SIZE: u32 = 32;
@@ -162,6 +163,22 @@ pub const DOT_DONE: Rgba = [0x4B, 0x4A, 0x47, 0xFF];
 pub const DOT_UNREAD: Rgba = [0x2A, 0x78, 0xD6, 0xFF];
 /// Ended badly. Claude's palette has no failure colour, so this is the one addition to it.
 pub const DOT_ERROR: Rgba = [0xE5, 0x48, 0x4D, 0xFF];
+
+/// The countdown's colours, by how close a session is to losing its context.
+pub const COLD_FRESH: Rgba = [0x3F, 0xB9, 0x50, 0xFF];
+pub const COLD_SOON: Rgba = [0xFA, 0xB2, 0x19, 0xFF];
+pub const COLD_URGENT: Rgba = [0xE5, 0x48, 0x4D, 0xFF];
+
+/// Colour for a countdown, or `None` for one that has already run out — a dead countdown is not
+/// worth a colour, and the row's own text colour says enough.
+pub fn cold_color(cold: Cold) -> Option<Rgba> {
+    match cold {
+        Cold::Fresh => Some(COLD_FRESH),
+        Cold::Soon => Some(COLD_SOON),
+        Cold::Urgent | Cold::Critical => Some(COLD_URGENT),
+        Cold::Gone => None,
+    }
+}
 
 /// Repository marks, sampled from the same session list as the status dots.
 pub const REPO_OPEN: Rgba = [0x26, 0xD7, 0x37, 0xFF];

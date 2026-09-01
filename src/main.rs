@@ -327,11 +327,12 @@ fn alert_rows(sessions: &[Session], now_ms: u64, window_mins: u64) -> Vec<AlertR
     sessions
         .iter()
         .map(|s| AlertRow {
-            text: render::alert_row(s, now_ms, window_mins),
+            text: render::alert_row(s, now_ms),
             pid: s.pid,
             deep_link: s.deep_link(),
             dot: icon::status_dot(s.status),
             repo: s.repo,
+            cold: render::cold_state(s, now_ms, window_mins),
         })
         .collect()
 }
