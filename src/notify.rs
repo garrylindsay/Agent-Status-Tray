@@ -114,6 +114,25 @@ struct Content {
     width: i32,
 }
 
+/// The desktop work area, or `None` when Windows will not say.
+fn work_area() -> Option<RECT> {
+    let mut work = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            &mut work as *mut RECT as *mut c_void,
+            0,
+        )
+    };
+    (ok != 0).then_some(work)
+}
+
 /// Width of `text` in the font currently selected into `hdc`.
 unsafe fn text_width(hdc: HDC, text: &str) -> i32 {
     unsafe {
@@ -156,17 +175,9 @@ unsafe fn measure_width(hwnd: HWND, title: &str, rows: &[AlertRow], overflow: us
         // A couple of pixels of slack, so the last glyph never sits against the ellipsis test.
         let wanted = widest + ACCENT_W + PAD * 2 + 4;
 
-        let mut work = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-        let ceiling = if SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            &mut work as *mut RECT as *mut c_void,
-            0,
-        ) != 0
-        {
-            MAX_WIDTH.min(work.right - work.left - 24)
-        } else {
-            MAX_WIDTH
+        let ceiling = match work_area() {
+            Some(work) => MAX_WIDTH.min(work.right - work.left - 24),
+            None => MAX_WIDTH,
         };
 
         wanted.clamp(MIN_WIDTH, ceiling.max(MIN_WIDTH))
@@ -355,8 +366,8 @@ impl Popup {
     }
 
     /// Shows (or refreshes) the alert. `duration_secs` of 0 leaves it up until it is clicked.
-    /// `max_rows` of 0 shows every row; anything beyond it collapses into a "+N more" line, so an
-    /// alert stays alert-sized rather than becoming a window.
+    /// Rows beyond `max_rows` collapse into a "+N more" line, so an alert stays alert-sized rather
+    /// than becoming a window.
     pub fn show(
         &self,
         title: &str,
@@ -366,7 +377,16 @@ impl Popup {
         sound: Sound,
         max_rows: usize,
     ) {
-        let limit = if max_rows == 0 { rows.len() } else { max_rows };
+        // The work area is the real ceiling: whatever the setting says, an alert taller than the
+        // screen cannot be read and would hang off it.
+        let work = work_area();
+        let usable = work
+            .map(|w| (w.bottom - w.top) - 24)
+            .unwrap_or(600)
+            .max(ROW_H * 3);
+        let fits = ((usable - PAD * 2 - TITLE_H - GAP) / ROW_H).max(1) as usize;
+
+        let limit = max_rows.max(1).min(fits);
         let shown: Vec<AlertRow> = rows.iter().take(limit).cloned().collect();
         let overflow = rows.len().saturating_sub(shown.len());
 
@@ -389,23 +409,10 @@ impl Popup {
         let height = PAD + TITLE_H + GAP + body_rows * ROW_H + PAD;
 
         unsafe {
-            let mut work = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            };
             // Falls back to a sane corner if the work area cannot be read.
-            let ok = SystemParametersInfoW(
-                SPI_GETWORKAREA,
-                0,
-                &mut work as *mut RECT as *mut c_void,
-                0,
-            );
-            let (x, y) = if ok != 0 {
-                (work.right - width - 12, work.bottom - height - 12)
-            } else {
-                (100, 100)
+            let (x, y) = match work {
+                Some(work) => (work.right - width - 12, work.bottom - height - 12),
+                None => (100, 100),
             };
 
             SetWindowPos(

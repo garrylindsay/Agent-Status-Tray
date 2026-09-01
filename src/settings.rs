@@ -72,6 +72,7 @@ fn wide(text: &str) -> Vec<u16> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
     Sort,
+    ListRows,
     Rows,
     CursorLocal,
     Repeat,
@@ -187,6 +188,15 @@ fn layout(config: &Config) -> Vec<Row> {
     );
     push(
         RowKind::Cycle {
+            label: "Menu shows at most".to_string(),
+            value: format!("{} rows", config.max_list_rows),
+        },
+        ROW_H,
+        Some(Action::Cycle(Field::ListRows, 1)),
+        &mut y,
+    );
+    push(
+        RowKind::Cycle {
             label: "Alert shows at most".to_string(),
             value: config::rows_label(config.max_alert_rows),
         },
@@ -271,6 +281,9 @@ fn apply(action: Action, config: &mut Config) -> bool {
         Action::ToggleEnabled => config.notifications_enabled = !config.notifications_enabled,
         Action::ToggleStatus(status) => config.toggle_status(status),
         Action::Cycle(Field::Sort, dir) => config.sort = cycle(&Sort::ALL, config.sort, dir),
+        Action::Cycle(Field::ListRows, dir) => {
+            config.max_list_rows = cycle(&config::LIST_CHOICES, config.max_list_rows, dir)
+        }
         Action::Cycle(Field::Rows, dir) => {
             config.max_alert_rows = cycle(&config::ROW_CHOICES, config.max_alert_rows, dir)
         }
@@ -886,6 +899,7 @@ mod tests {
         assert!(!apply(Action::Cycle(Field::Repeat, 1), &mut config));
         assert!(!apply(Action::Cycle(Field::Sort, 1), &mut config));
         assert!(!apply(Action::Cycle(Field::Rows, 1), &mut config));
+        assert!(!apply(Action::Cycle(Field::ListRows, 1), &mut config));
     }
 
     #[test]

@@ -64,11 +64,22 @@ fn make_icon(state: IconState) -> Option<Icon> {
 struct Ui {
     tray: TrayIcon,
     icon_state: Option<IconState>,
-    /// The rendered rows, so the menu is rebuilt only when they actually change.
-    menu_signature: String,
     tooltip: String,
-    /// The builder ships no menu, so the first apply has to install one even if it is empty.
-    menu_installed: bool,
+    menu: Option<MenuState>,
+}
+
+/// The live menu and the rows it was built from.
+///
+/// The menu is built once and then edited in place. Rebuilding it every tick would be simpler, but
+/// `muda` turns each item icon into a bitmap with `CreateDIBSection` and never frees it, so a
+/// rebuild-per-second leaks one GDI handle per row per second and reaches the 10,000-handle limit
+/// in about a quarter of an hour — at which point Windows draws the menu as an empty white box.
+/// Editing text in place allocates nothing, and an icon is replaced only when its state changes.
+struct MenuState {
+    header: MenuItem,
+    items: Vec<IconMenuItem>,
+    rows: Vec<MenuRow>,
+    overflow: Option<MenuItem>,
 }
 
 impl Ui {
@@ -76,13 +87,19 @@ impl Ui {
         Ui {
             tray,
             icon_state: None,
-            menu_signature: String::new(),
             tooltip: String::new(),
-            menu_installed: false,
+            menu: None,
         }
     }
 
-    fn apply(&mut self, state: IconState, header: String, rows: Vec<MenuRow>, tooltip: String) {
+    fn apply(
+        &mut self,
+        state: IconState,
+        header: String,
+        rows: Vec<MenuRow>,
+        tooltip: String,
+        max_rows: usize,
+    ) {
         if self.icon_state != Some(state) {
             if let Some(icon) = make_icon(state) {
                 let _ = self.tray.set_icon(Some(icon));
@@ -95,56 +112,115 @@ impl Ui {
             self.tooltip = tooltip;
         }
 
-        // Elapsed times change every tick, so rows are compared as rendered text.
-        let signature = format!("{header}|{rows:?}");
-        if !self.menu_installed || self.menu_signature != signature {
-            if let Some(menu) = build_menu(&header, &rows) {
+        let hidden = rows.len().saturating_sub(max_rows);
+        let shown: Vec<MenuRow> = rows.into_iter().take(max_rows).collect();
+
+        // The item list can only be edited in place while it still describes the same sessions in
+        // the same order: an item's id carries its pid, so a changed pid has to mean a new item.
+        let reusable = self.menu.as_ref().is_some_and(|menu| {
+            menu.items.len() == shown.len()
+                && menu.overflow.is_some() == (hidden > 0)
+                && menu
+                    .rows
+                    .iter()
+                    .zip(&shown)
+                    .all(|(before, now)| before.pid == now.pid)
+        });
+
+        if !reusable {
+            if let Some((menu, state)) = build_menu(&header, &shown, hidden) {
                 self.tray.set_menu(Some(Box::new(menu)));
-                self.menu_installed = true;
+                self.menu = Some(state);
             }
-            self.menu_signature = signature;
+            return;
         }
+
+        let Some(menu) = self.menu.as_mut() else { return };
+        if menu.header.text() != header {
+            menu.header.set_text(&header);
+        }
+        for (index, row) in shown.iter().enumerate() {
+            let before = &menu.rows[index];
+            if before.text != row.text {
+                menu.items[index].set_text(&row.text);
+            }
+            // Only a real change of state pays for a new bitmap.
+            if before.dot != row.dot || before.repo != row.repo {
+                menu.items[index].set_icon(menu_icon(row));
+            }
+        }
+        if let Some(overflow) = &menu.overflow {
+            let text = overflow_text(hidden);
+            if overflow.text() != text {
+                overflow.set_text(&text);
+            }
+        }
+        menu.rows = shown;
     }
+}
+
+fn overflow_text(hidden: usize) -> String {
+    format!("+{hidden} more")
+}
+
+/// A menu item's icon: the status dot and the repository mark sharing one bitmap.
+fn menu_icon(row: &MenuRow) -> Option<tray_icon::menu::Icon> {
+    tray_icon::menu::Icon::from_rgba(
+        icon::menu_icon_rgba(row.dot, row.repo),
+        icon::DOT_SIZE,
+        icon::DOT_SIZE,
+    )
+    .ok()
 }
 
 /// Clicking a session row raises the window hosting that session, as clicking an alert row does.
 ///
 /// Settings deliberately open a window rather than living in submenus here: a Win32 menu closes on
 /// every click, so changing several settings meant reopening the menu once per change.
-fn build_menu(header: &str, rows: &[MenuRow]) -> Option<Menu> {
+fn build_menu(header: &str, rows: &[MenuRow], hidden: usize) -> Option<(Menu, MenuState)> {
     let menu = Menu::new();
 
-    menu.append(&MenuItem::new(header, false, None)).ok()?;
+    let header_item = MenuItem::new(header, false, None);
+    menu.append(&header_item).ok()?;
     menu.append(&PredefinedMenuItem::separator()).ok()?;
+
+    let mut items = Vec::with_capacity(rows.len());
     for row in rows {
-        // A menu item's icon is the only way to get colour into a native Win32 menu without
-        // owner-drawing every item, and it gets one icon, so the status dot and the repository
-        // mark share it.
-        let dot = tray_icon::menu::Icon::from_rgba(
-            icon::menu_icon_rgba(row.dot, row.repo),
-            icon::DOT_SIZE,
-            icon::DOT_SIZE,
-        )
-        .ok();
-        menu.append(&IconMenuItem::with_id(
+        let item = IconMenuItem::with_id(
             format!("session.{}", row.pid),
             &row.text,
             true,
-            dot,
+            menu_icon(row),
             None,
-        ))
-        .ok()?;
+        );
+        menu.append(&item).ok()?;
+        items.push(item);
     }
+
+    // Says plainly that the list was cut, rather than quietly ending.
+    let overflow = (hidden > 0).then(|| MenuItem::new(overflow_text(hidden), false, None));
+    if let Some(overflow) = &overflow {
+        menu.append(overflow).ok()?;
+    }
+
     if !rows.is_empty() {
         menu.append(&PredefinedMenuItem::separator()).ok()?;
     }
-
     menu.append(&MenuItem::with_id(SETTINGS_ID, "Settings\u{2026}", true, None))
         .ok()?;
     menu.append(&PredefinedMenuItem::separator()).ok()?;
     menu.append(&MenuItem::with_id(EXIT_ID, "Exit", true, None))
         .ok()?;
-    Some(menu)
+
+    Some((
+        menu,
+        MenuState {
+            header: header_item,
+            items,
+            rows: rows.to_vec(),
+            overflow,
+        },
+    ))
 }
 
 /// One session as the tray menu shows it.
@@ -312,6 +388,7 @@ fn tick(
         render::header(&sessions),
         rows,
         render::tooltip(&sessions),
+        config.max_list_rows as usize,
     );
 
     let matching: Vec<&Session> = sessions
@@ -483,6 +560,7 @@ fn main() {
         render::header(&sessions),
         sessions.iter().map(|s| MenuRow::new(s, now)).collect(),
         render::tooltip(&sessions),
+        config.max_list_rows as usize,
     );
 
     MenuEvent::set_event_handler(Some(|event: MenuEvent| {

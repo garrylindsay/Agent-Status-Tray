@@ -95,6 +95,10 @@ pub const POLL_CHOICES: [u64; 6] = [500, 1_000, 2_000, 5_000, 10_000, 30_000];
 /// How long a popup stays on screen, in seconds. `0` means "stay until clicked".
 pub const POPUP_CHOICES: [u64; 5] = [0, 5, 8, 15, 30];
 
+/// Session rows the tray menu will show. Capped rather than unbounded: a menu of every chat you
+/// have ever had is unusable, and the sort puts what matters at the top anyway.
+pub const LIST_CHOICES: [u64; 6] = [10, 15, 20, 30, 40, 50];
+
 /// How far back local Cursor chats are listed, in days. `0` leaves them out.
 pub const CURSOR_LOCAL_CHOICES: [u64; 6] = [0, 1, 3, 7, 30, 90];
 
@@ -108,12 +112,14 @@ pub fn cursor_local_label(days: u64) -> String {
     }
 }
 
-/// Rows an alert will show before collapsing the rest into "+N more". `0` means every one.
-pub const ROW_CHOICES: [u64; 7] = [3, 4, 5, 6, 8, 12, 0];
+/// Rows an alert will show before collapsing the rest into "+N more".
+///
+/// There is deliberately no "all of them": with a month of Cursor chats listed that is sixty-odd
+/// rows, and an alert taller than the screen is not an alert.
+pub const ROW_CHOICES: [u64; 8] = [3, 4, 5, 6, 8, 12, 20, 50];
 
 pub fn rows_label(rows: u64) -> String {
     match rows {
-        0 => "All of them".to_string(),
         1 => "1 row".to_string(),
         n => format!("{n} rows"),
     }
@@ -139,6 +145,8 @@ pub struct Config {
     pub max_alert_rows: u64,
     /// How far back local Cursor chats are listed, in days. `0` lists only cloud agents.
     pub cursor_local_days: u64,
+    /// Session rows the tray menu shows before collapsing the rest into "+N more".
+    pub max_list_rows: u64,
 }
 
 impl Default for Config {
@@ -153,6 +161,7 @@ impl Default for Config {
             sort: Sort::Attention,
             max_alert_rows: 4,
             cursor_local_days: 7,
+            max_list_rows: 20,
         }
     }
 }
@@ -180,10 +189,14 @@ impl Config {
         if self.popup_secs != 0 {
             self.popup_secs = self.popup_secs.clamp(2, 3_600);
         }
-        // An alert taller than the screen helps nobody, and zero means "all" rather than "none".
-        if self.max_alert_rows != 0 {
-            self.max_alert_rows = self.max_alert_rows.clamp(1, 40);
+        // Fifty is the ceiling here as well. A config written before the ceiling existed can hold
+        // 0, which used to mean "all of them"; it becomes the ceiling rather than everything.
+        if self.max_alert_rows == 0 {
+            self.max_alert_rows = 50;
         }
+        self.max_alert_rows = self.max_alert_rows.clamp(1, 50);
+        // Fifty is the ceiling: past that the menu is taller than the screen and unusable.
+        self.max_list_rows = self.max_list_rows.clamp(5, 50);
         // Local chats have no live state, so a long window is all cost and no news.
         if self.cursor_local_days != 0 {
             self.cursor_local_days = self.cursor_local_days.clamp(1, 365);
@@ -315,24 +328,26 @@ mod tests {
             repeat_secs: 1,
             popup_secs: 99_999,
             max_alert_rows: 9_999,
+            max_list_rows: 9_999,
             ..Config::default()
         };
         c.sanitize();
         assert_eq!(c.poll_ms, 200);
         assert_eq!(c.repeat_secs, 5);
         assert_eq!(c.popup_secs, 3_600);
-        assert_eq!(c.max_alert_rows, 40);
+        assert_eq!(c.max_alert_rows, 50);
+        assert_eq!(c.max_list_rows, 50);
     }
 
-    /// Zero means every row, so it must survive clamping rather than becoming one.
+    /// A config written when zero meant "all of them" must land on the ceiling, not on one row.
     #[test]
-    fn showing_all_rows_is_not_clamped_away() {
+    fn the_old_unbounded_setting_becomes_the_ceiling() {
         let mut c = Config {
             max_alert_rows: 0,
             ..Config::default()
         };
         c.sanitize();
-        assert_eq!(c.max_alert_rows, 0);
+        assert_eq!(c.max_alert_rows, 50);
     }
 
     /// A BOM must not throw away every setting in the file.

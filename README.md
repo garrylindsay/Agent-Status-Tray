@@ -52,6 +52,10 @@ They are limited to a recent window, a week by default, because there are hundre
 of them reports a live state. Only the handful inside the window have their composer record read,
 so the large conversation blobs are touched a few at a time rather than in their hundreds.
 
+Chats with no title are left out. They are scratch composers that were opened and never used —
+Cursor shows nothing for them either, and they have no timestamp, so they would otherwise appear as
+a run of identical rows dated to the epoch.
+
 The Cursor status numbers are its own `aiserver.v1.BackgroundComposerStatus`, read out of the app's
 bundle rather than guessed:
 
@@ -126,8 +130,13 @@ things meant reopening the menu three times.
 | Alert stays for | 8 seconds | until clicked, 5s, 8s, 15s, 30s |
 | Check sessions every | 1 second | 0.5s, 1s, 2s, 5s, 10s, 30s |
 | Sort rows by | Attention first | attention first, most recent, oldest |
-| Alert shows at most | 4 rows | 3, 4, 5, 6, 8, 12, all of them |
+| Menu shows at most | 20 rows | 10, 15, 20, 30, 40, 50 |
+| Alert shows at most | 4 rows | 3, 4, 5, 6, 8, 12, 20, 50 |
 | Cursor local chats | Last week | cloud agents only, last day, 3 days, week, month, 90 days |
+
+Both row limits stop at 50 and there is no "all of them": with a month of Cursor chats listed that
+is sixty-odd rows, and a menu or an alert taller than the screen is neither. The alert is clamped to
+the work area on top of the setting, so it can never run off the screen whatever the number says.
 
 **Attention first** puts what needs you at the top and, within a state, whatever has been stuck
 longest. **Most recent** and **oldest** ignore state and go purely by last activity. The order

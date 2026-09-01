@@ -162,6 +162,15 @@ struct Composer {
 }
 
 impl Composer {
+    /// The chat's own title, when it has one worth showing.
+    fn title(&self) -> Option<String> {
+        self.name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+    }
+
     /// `completed` and `aborted` are both endings; `none` is a chat that never ran. None of them
     /// is live — Cursor does not flush a running composer's state to disk.
     fn status(&self) -> Status {
@@ -240,7 +249,7 @@ fn folders_by_conversation(connection: &rusqlite::Connection) -> HashMap<String,
 ///
 /// The window is what keeps this honest: there are hundreds of these, none of them says anything
 /// about a live state, and a list of every chat ever would bury the agents that do.
-fn read_local(state: &rusqlite::Connection, days: u64, now_ms: u64) -> Vec<(String, Composer)> {
+fn read_local(state: &rusqlite::Connection, days: u64, now_ms: u64) -> Vec<(String, u64, Composer)> {
     let Some(dir) = store_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) else {
         return Vec::new();
     };
@@ -258,19 +267,21 @@ fn read_local(state: &rusqlite::Connection, days: u64, now_ms: u64) -> Vec<(Stri
 
     let cutoff = now_ms.saturating_sub(days.saturating_mul(86_400_000));
     let Ok(mut statement) = index.prepare(
-        "select id from conversations where source = 'local' and is_archived = 0 \
-         and updated_at >= ?1 order by updated_at desc limit 60",
+        "select id, updated_at from conversations where source = 'local' and is_archived = 0 \
+         and updated_at >= ?1 order by updated_at desc limit 80",
     ) else {
         return Vec::new();
     };
-    let Ok(rows) = statement.query_map([cutoff as i64], |row| row.get::<_, String>(0)) else {
+    let Ok(rows) = statement.query_map([cutoff as i64], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+    }) else {
         return Vec::new();
     };
 
     // Only the handful inside the window are looked up, so the big conversation blobs are read
     // a few at a time rather than in their hundreds.
     rows.flatten()
-        .filter_map(|id| {
+        .filter_map(|(id, updated_at)| {
             let value = state
                 .query_row(
                     "select value from cursorDiskKV where key = ?1",
@@ -279,7 +290,10 @@ fn read_local(state: &rusqlite::Connection, days: u64, now_ms: u64) -> Vec<(Stri
                 )
                 .ok()?;
             let composer = serde_json::from_str::<Composer>(&value).ok()?;
-            Some((id, composer))
+            // A chat with no title is one Cursor itself shows nothing for — a scratch composer
+            // that was opened and never used. It has nothing to say on a row.
+            composer.title()?;
+            Some((id, updated_at, composer))
         })
         .collect()
 }
@@ -363,7 +377,7 @@ impl Cursor {
         let folders = folders_by_conversation(&state);
         read_local(&state, days, now_ms)
             .into_iter()
-            .map(|(id, composer)| Session {
+            .map(|(id, updated_at, composer)| Session {
                 provider: Provider::Cursor,
                 pid: self.window_pid,
                 // Cursor groups these by folder, so the folder is what names the row.
@@ -371,11 +385,7 @@ impl Cursor {
                 cwd: String::new(),
                 // The search index lags and often has no title for the newest chat; the composer
                 // record has the real one.
-                title: composer
-                    .name
-                    .clone()
-                    .map(|n| n.trim().to_string())
-                    .filter(|n| !n.is_empty()),
+                title: composer.title(),
                 session_id: Some(id),
                 entrypoint: None,
                 desktop_session_id: None,
@@ -383,7 +393,12 @@ impl Cursor {
                 repo: crate::session::Repo::Nothing,
                 status: composer.status(),
                 waiting_for: None,
-                since: composer.last_updated_at.unwrap_or(0),
+                // A composer record without a timestamp would date the row to the epoch, which
+                // renders as "up 20697d"; the index knows when it was last touched.
+                since: composer
+                    .last_updated_at
+                    .filter(|t| *t > 0)
+                    .unwrap_or(updated_at),
             })
             .collect()
     }
@@ -469,6 +484,19 @@ mod tests {
         assert_eq!(ended("completed"), Status::Idle);
         assert_eq!(ended("aborted"), Status::Idle);
         assert_eq!(ended("none"), Status::Unknown);
+    }
+
+    /// A scratch composer that was opened and never used has no title and nothing to say.
+    #[test]
+    fn untitled_chats_have_no_title() {
+        let composer = |name: Option<&str>| Composer {
+            name: name.map(str::to_string),
+            status: None,
+            last_updated_at: None,
+        };
+        assert_eq!(composer(Some("Cursor account balances")).title().as_deref(), Some("Cursor account balances"));
+        assert!(composer(Some("   ")).title().is_none());
+        assert!(composer(None).title().is_none());
     }
 
     #[test]
