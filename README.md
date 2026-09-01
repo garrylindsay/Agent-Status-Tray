@@ -382,13 +382,32 @@ is enough.
 
 No console window appears; look for the icon in the tray. Exit from the tray menu.
 
+### Rebuilding while it runs
+
+Windows locks a running exe against writes, so `cargo build` cannot relink while the tray is
+running — it has to be stopped first. Stopping it is forced on you, starting it again is not,
+which is how a rebuild quietly leaves you with no tray at all. `rebuild.ps1` does both halves:
+
+```powershell
+.\rebuild.ps1
+```
+
+It stops any running copy, waits for the handle to actually close — the link step needs the file
+released, not just the kill delivered — builds, and starts the result. Trailing arguments are
+passed through to `cargo`, and `-NoStart` builds without relaunching, for when you are about to
+start it yourself under a debugger.
+
+A failed build still gets you a tray: the exe on disk is then the previous build, and an old tray
+is worth more than none, a failed build being the moment you least want to lose sight of your
+sessions. The script exits with cargo's own exit code, so it still fails honestly in a chain.
+
 ### Start it with Windows
 
 Drop a shortcut to the release exe in the startup folder:
 
 ```powershell
-$exe = "$PWD\target\release\claude-tray.exe"
-$lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\claude-tray.lnk"
+$exe = "$PWD\target\release\agent-status-tray.exe"
+$lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\agent-status-tray.lnk"
 $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
 $s.TargetPath = $exe
 $s.Save()
