@@ -401,6 +401,12 @@ $s.Save()
   messaging pipe instead). Where that is the case every session reads as `Unknown`, the icon stays
   a gray ring with a live count, and the waiting/busy colours never appear. Alerts still work —
   tick **Unknown / not reported** under Settings → Alert me about.
+- Cursor's **local** chats never show as unread here, even when Cursor's own sidebar shows one blue.
+  The sidebar reads `isUnread: r.hasUnreadMessages`, and that field is on the `composerData` record
+  — but it is never written as `true`: across 483 records on this machine, 357 hold `false` and 126
+  do not carry it at all, including chats the sidebar was showing blue at the time. Cursor keeps
+  the live value in memory and persists only the read state, so a local chat reads as finished
+  here. Cursor's **cloud** agents are unaffected: their `isUnread` is persisted, and blue works.
 - The blue "finished, not looked at" dot cannot be narrowed to Claude's amber "waiting on you".
   The app decides that with `!isArchived && pendingToolPermissions.length > 0`, and
   `pendingToolPermissions` is held in memory: it appears in none of the session records on disk.
