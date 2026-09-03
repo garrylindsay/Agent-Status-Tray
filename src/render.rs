@@ -148,9 +148,14 @@ fn row_text(session: &Session, now_ms: u64) -> String {
 /// Row for the tray menu, with `&` escaped for the menu's mnemonic parser.
 ///
 /// A menu item can carry one icon and that is the status dot, so the repository state has to be
-/// said in words here rather than drawn.
+/// said in words here rather than drawn. The cost goes in ahead of the countdown, keeping the same
+/// order the alert draws them in, so the two lists read the same way round.
 pub fn row(session: &Session, now_ms: u64, window_mins: u64) -> String {
     let mut text = row_text(session, now_ms);
+    if let Some(usd) = session.cost {
+        text.push_str(" \u{00b7} ");
+        text.push_str(&crate::cost::format(usd));
+    }
     if let Some(cold) = cold_text(session, now_ms, window_mins) {
         text.push_str(" \u{00b7} ");
         text.push_str(&cold);
@@ -314,6 +319,24 @@ mod tests {
             since: 0,
             cost: None,
         }
+    }
+
+    /// Cost sits between the status and the countdown, the same order the alert draws them, and is
+    /// simply absent on a session that has none rather than showing a placeholder.
+    #[test]
+    fn the_menu_row_carries_the_cost_where_the_alert_draws_it() {
+        let mut s = session("rmsplus-46", Status::Unread);
+        s.since = 0;
+        s.cost = Some(2.19);
+        let text = row(&s, 0, 60);
+        assert!(text.contains("$2.19"), "{text}");
+        let cost_at = text.find("$2.19").unwrap();
+        let cold_at = text.find("cold").unwrap();
+        assert!(cost_at < cold_at, "cost must come before the countdown: {text}");
+
+        s.cost = None;
+        let bare = row(&s, 0, 60);
+        assert!(!bare.contains('$'), "{bare}");
     }
 
     /// The menu says the repository state in words; the popup draws it and must not repeat it.

@@ -332,10 +332,15 @@ Manager. The `--demo-` modes are not covered by it, so they still run alongside 
 
 ## What a session has cost
 
-Each Claude Code row in the alert carries a running dollar total, drawn dim to the left of the cold
-countdown. Every assistant turn writes a `usage` block into the transcript, so the spend of a
-conversation can be added up from a file that is already on disk. Nothing is sent anywhere to work
-it out.
+Each Claude Code row carries a running dollar total — in the alert, drawn dim to the left of the
+cold countdown, and in the tray menu as a word in the same place:
+
+```
+Claude/RMSPlus · Architecture and tech stack — UNREAD 4h25m · $31.58 · cold · branch
+```
+
+Every assistant turn writes a `usage` block into the transcript, so the spend of a conversation can
+be added up from a file that is already on disk. Nothing is sent anywhere to work it out.
 
 **This is what the conversation would cost at published API rates.** It is not a bill. If you reach
 Claude Code through a Max or Pro subscription, you are not charged per token and the number is a

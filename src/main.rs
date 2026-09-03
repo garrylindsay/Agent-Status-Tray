@@ -733,3 +733,18 @@ fn main() {
         unsafe { KillTimer(ptr::null_mut(), timer_id) };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Prints the menu rows exactly as the tray builds them, for whatever this machine is running.
+    /// `cargo test -- --nocapture live_menu_rows`
+    #[test]
+    fn live_menu_rows() {
+        let config = crate::config::Config::load();
+        let now = crate::now_ms();
+        let mut sources = super::Sources::new();
+        for session in sources.collect(now, &config).iter().take(10) {
+            println!("{}", crate::render::row(session, now, config.cache_window_mins));
+        }
+    }
+}
