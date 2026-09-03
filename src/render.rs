@@ -312,6 +312,7 @@ mod tests {
             status,
             waiting_for: None,
             since: 0,
+            cost: None,
         }
     }
 

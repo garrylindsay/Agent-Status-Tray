@@ -317,6 +317,40 @@ Launching the program while it is already running does nothing: it takes a named
 one is already held, because two tray icons for the same thing can only be sorted out from Task
 Manager. The `--demo-` modes are not covered by it, so they still run alongside the real one.
 
+## What a session has cost
+
+Each Claude Code row in the alert carries a running dollar total, drawn dim to the left of the cold
+countdown. Every assistant turn writes a `usage` block into the transcript, so the spend of a
+conversation can be added up from a file that is already on disk. Nothing is sent anywhere to work
+it out.
+
+**This is what the conversation would cost at published API rates.** It is not a bill. If you reach
+Claude Code through a Max or Pro subscription, you are not charged per token and the number is a
+measure of what you used, not of what you owe. Read it as a sense of weight -- which conversations
+are expensive, and how much a long agentic run actually consumes.
+
+Three details decide whether the figure is right:
+
+* **Cache writes are not priced like input.** The 5-minute TTL costs a quarter more than the input
+  rate and the 1-hour TTL costs double, and Claude Code uses both. The transcript breaks the write
+  down by TTL, so each is charged at its own rate rather than averaged.
+* **Cache reads are a tenth of the input rate** -- a fortieth on Fable. On a long session most of
+  the tokens are cache reads, so treating them as input would overstate the total several times
+  over.
+* **One response is written as several lines.** A turn with text and a tool call becomes one line
+  per content block, each repeating an identical copy of the same `usage`. Counting lines instead of
+  responses very nearly doubles the total; repeats of a response are always adjacent, so only the
+  previous response id has to be remembered to skip them.
+
+A model this build has no price for is left out of the total rather than guessed at, so a model
+released after the build shows a figure that is too low rather than one that is wrong in an unknown
+direction. Cursor rows show nothing at all: Cursor records no token usage on disk.
+
+Transcripts only ever grow, so each one is read once and afterwards only from where the last read
+stopped -- there are around 100MB of them on a working machine, and this runs on every poll. The
+running total is kept against every session on show, finished ones included, so nothing is re-read
+from the beginning on the next tick.
+
 ## What the desktop app knows
 
 The session registry says a session exists; it does not say what has happened to it, and on builds

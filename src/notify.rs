@@ -101,6 +101,9 @@ pub struct AlertRow {
     pub repo: crate::session::Repo,
     /// Countdown to this session's context going cold, drawn in a colour of its own.
     pub cold: Option<(String, crate::render::Cold)>,
+    /// What the session has cost so far, already formatted. Drawn dim: it is worth knowing, but
+    /// it is not what the alert is for, and it must not compete with the countdown beside it.
+    pub cost: Option<String>,
 }
 
 /// What the window paints on its next `WM_PAINT`.
@@ -174,8 +177,14 @@ unsafe fn measure_width(hwnd: HWND, title: &str, rows: &[AlertRow], overflow: us
                 .as_ref()
                 .map(|(text, _)| text_width(hdc, text) + 12)
                 .unwrap_or(0);
-            widest = widest
-                .max(text_width(hdc, &row.text) + DOT_COLUMN + repo_indent(row.repo) + cold);
+            let cost = row
+                .cost
+                .as_ref()
+                .map(|text| text_width(hdc, text) + 12)
+                .unwrap_or(0);
+            widest = widest.max(
+                text_width(hdc, &row.text) + DOT_COLUMN + repo_indent(row.repo) + cost + cold,
+            );
         }
         if overflow > 0 {
             widest = widest.max(text_width(hdc, &format!("+{overflow} more")) + DOT_COLUMN);
@@ -670,12 +679,19 @@ unsafe fn paint(hwnd: HWND) {
                 .as_ref()
                 .map(|(text, _)| text_width(hdc, text) + 12)
                 .unwrap_or(0);
+            // Cost sits inside the countdown, so the rightmost column stays the one that is
+            // running out. Both are reserved before the title, which takes what is left.
+            let cost_width = row
+                .cost
+                .as_ref()
+                .map(|text| text_width(hdc, text) + 12)
+                .unwrap_or(0);
 
             SetTextColor(hdc, palette.text);
             let mut r = RECT {
                 left: ACCENT_W + PAD + DOT_COLUMN + repo_indent(row.repo),
                 top: y,
-                right: width - PAD - cold_width,
+                right: width - PAD - cold_width - cost_width,
                 bottom: y + ROW_H,
             };
             let mut t = wide(&row.text);
@@ -686,6 +702,24 @@ unsafe fn paint(hwnd: HWND) {
                 &mut r,
                 DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
             );
+
+            if let Some(text) = &row.cost {
+                SetTextColor(hdc, palette.dim);
+                let mut cost_rect = RECT {
+                    left: width - PAD - cold_width - cost_width,
+                    top: y,
+                    right: width - PAD - cold_width,
+                    bottom: y + ROW_H,
+                };
+                let mut ct = wide(text);
+                DrawTextW(
+                    hdc,
+                    ct.as_mut_ptr(),
+                    -1,
+                    &mut cost_rect,
+                    DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX,
+                );
+            }
 
             if let Some((text, cold)) = &row.cold {
                 // A flashing countdown alternates with the row's own colour rather than vanishing,

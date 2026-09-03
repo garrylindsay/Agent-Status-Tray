@@ -42,7 +42,7 @@ fn encode_cwd(cwd: &str) -> String {
         .collect()
 }
 
-fn transcript_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
+pub fn transcript_path(cwd: &str, session_id: &str) -> Option<PathBuf> {
     if cwd.trim().is_empty() || session_id.trim().is_empty() {
         return None;
     }

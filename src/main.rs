@@ -10,6 +10,7 @@
 mod activate;
 mod alert;
 mod config;
+mod cost;
 mod cursor;
 mod desktop;
 mod icon;
@@ -40,6 +41,7 @@ use desktop::Desktop;
 use notify::{AlertRow, Popup};
 use session::{IconState, Registry, Session, Status};
 use settings::SettingsWindow;
+use cost::Costs;
 use title::Titles;
 
 const EXIT_ID: &str = "claude-tray-exit";
@@ -251,6 +253,7 @@ impl MenuRow {
 struct Sources {
     registry: Registry,
     titles: Titles,
+    costs: Costs,
     desktop: Desktop,
     cursor: Cursor,
 }
@@ -260,6 +263,7 @@ impl Sources {
         Sources {
             registry: Registry::new(),
             titles: Titles::new(),
+            costs: Costs::new(),
             desktop: Desktop::new(),
             cursor: Cursor::new(),
         }
@@ -290,6 +294,17 @@ impl Sources {
                 pid,
             ));
         }
+
+        // Spend is totalled after the past conversations are folded in, so their transcripts are
+        // read too -- and so the cache is kept against every id on show. Retaining only the running
+        // ones would evict each finished session every tick and re-read its whole file on the next.
+        for session in &mut sessions {
+            if let Some(id) = session.session_id.clone() {
+                session.cost = self.costs.get(&session.cwd, &id);
+            }
+        }
+        let shown: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
+        self.costs.retain(&shown);
 
         sessions.extend(self.cursor.sessions(now_ms, config.cursor_local_days));
 
@@ -334,6 +349,7 @@ fn alert_rows(sessions: &[Session], now_ms: u64, window_mins: u64) -> Vec<AlertR
             dot: icon::status_dot(s.status),
             repo: s.repo,
             cold: render::cold_state(s, now_ms, window_mins),
+            cost: s.cost.map(cost::format),
         })
         .collect()
 }
@@ -354,6 +370,7 @@ fn sample_sessions(now_ms: u64) -> Vec<Session> {
             status: Status::Waiting,
             waiting_for: Some("permission prompt".to_string()),
             since: now_ms.saturating_sub(240_000),
+            cost: Some(4.12),
         },
         Session {
             provider: session::Provider::Cursor,
@@ -368,6 +385,7 @@ fn sample_sessions(now_ms: u64) -> Vec<Session> {
             status: Status::Busy,
             waiting_for: None,
             since: now_ms.saturating_sub(12_000),
+            cost: Some(0.37),
         },
     ]
 }

@@ -234,6 +234,8 @@ impl Desktop {
                 session_id: Some(cli.clone()),
                 entrypoint: Some("claude-desktop".to_string()),
                 desktop_session_id: Some(info.session_id.clone()),
+                // Filled in by the collector, which owns the transcript reader.
+                cost: None,
                 repo: info.repo,
                 // Nothing is running, so the only thing left to say is whether it was read.
                 status: if info.unread() {

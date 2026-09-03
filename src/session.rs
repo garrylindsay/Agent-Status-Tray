@@ -147,6 +147,8 @@ pub struct Session {
     pub waiting_for: Option<String>,
     /// Epoch ms the current status was entered; falls back to session start.
     pub since: u64,
+    /// What the conversation has cost so far at API rates, where a transcript records it.
+    pub cost: Option<f64>,
 }
 
 impl Session {
@@ -287,6 +289,7 @@ impl Registry {
                 name: display_name(pid, &raw),
                 cwd: raw.cwd.clone(),
                 title: None,
+                cost: None,
                 desktop_session_id: None,
                 repo: Repo::default(),
                 session_id: raw
@@ -393,6 +396,7 @@ mod tests {
             status: Status::Idle,
             waiting_for: None,
             since: 0,
+            cost: None,
         }
     }
 

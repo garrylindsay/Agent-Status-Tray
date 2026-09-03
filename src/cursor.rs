@@ -355,6 +355,8 @@ impl Cursor {
                 status: agent.status(),
                 waiting_for: None,
                 since: agent.since(),
+                // Cursor records no token usage on disk, so there is no cost to show.
+                cost: None,
             })
             .collect();
 
@@ -399,6 +401,7 @@ impl Cursor {
                     .last_updated_at
                     .filter(|t| *t > 0)
                     .unwrap_or(updated_at),
+                cost: None,
             })
             .collect()
     }
