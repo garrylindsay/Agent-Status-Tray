@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use crate::config::{self, Config, Sort, Sound};
+use crate::config::{self, Config, CostScope, Sort, Sound};
 use crate::session::Status;
 use crate::theme::Palette;
 
@@ -72,6 +72,7 @@ fn wide(text: &str) -> Vec<u16> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
     Sort,
+    Cost,
     Cache,
     ClaudePast,
     ListRows,
@@ -190,6 +191,15 @@ fn layout(config: &Config) -> Vec<Row> {
     );
     push(
         RowKind::Cycle {
+            label: "Cost shown".to_string(),
+            value: config.cost_scope.label().to_string(),
+        },
+        ROW_H,
+        Some(Action::Cycle(Field::Cost, 1)),
+        &mut y,
+    );
+    push(
+        RowKind::Cycle {
             label: "Context cache window".to_string(),
             value: config::cache_label(config.cache_window_mins),
         },
@@ -301,6 +311,9 @@ fn apply(action: Action, config: &mut Config) -> bool {
         Action::ToggleEnabled => config.notifications_enabled = !config.notifications_enabled,
         Action::ToggleStatus(status) => config.toggle_status(status),
         Action::Cycle(Field::Sort, dir) => config.sort = cycle(&Sort::ALL, config.sort, dir),
+        Action::Cycle(Field::Cost, dir) => {
+            config.cost_scope = cycle(&CostScope::ALL, config.cost_scope, dir)
+        }
         Action::Cycle(Field::Cache, dir) => {
             config.cache_window_mins = cycle(&config::CACHE_CHOICES, config.cache_window_mins, dir)
         }

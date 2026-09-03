@@ -4,6 +4,11 @@
 //! the spend of a conversation can be added up from the file it already writes. Nothing here talks
 //! to an API; it is arithmetic over bytes already on disk.
 //!
+//! A conversation is also not one continuous run. Claude's own usage report totals only the run
+//! you are in, so a session picked up again after a night reads far cheaper there than its whole
+//! transcript has cost. Both totals are kept as the file is walked, and the setting picks which to
+//! show -- keeping both means changing the setting never costs a re-read.
+//!
 //! Two properties of the transcripts shape this module:
 //!
 //! * **They only ever grow.** So a session is parsed once and then only from where the last read
@@ -19,6 +24,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::config::CostScope;
 use crate::title::transcript_path;
 
 /// Dollars per million tokens, as published for the Claude API.
@@ -60,6 +66,33 @@ fn price(model: &str) -> Option<Price> {
 #[derive(Deserialize)]
 struct Line {
     message: Option<Message>,
+    /// When the turn happened, which is what separates one run from the next.
+    timestamp: Option<String>,
+}
+
+/// Epoch ms for an ISO-8601 UTC stamp like `2026-09-03T18:32:21.758Z`.
+///
+/// Only differences between two of these are ever taken, so leap seconds and sub-second precision
+/// do not matter; the calendar arithmetic does, because a run boundary can fall across midnight,
+/// a month end or a year end.
+fn epoch_ms(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[13] != b':' {
+        return None;
+    }
+    let num = |from: usize, to: usize| text.get(from..to)?.parse::<i64>().ok();
+    let (y, m, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (hh, mm, ss) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+
+    // Days from 1970-01-01, by Howard Hinnant's civil-date algorithm.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+
+    Some(((days * 24 + hh) * 60 + mm) * 60_000 + ss * 1000)
 }
 
 #[derive(Deserialize)]
@@ -112,14 +145,20 @@ impl Usage {
     }
 }
 
-/// How far through a transcript the running total has been carried.
+/// How far through a transcript the running totals have been carried.
 struct Cached {
     /// Bytes consumed, always ending on a line boundary so the next read resumes cleanly.
     offset: u64,
     /// The last response counted. Repeats of one response are always adjacent, so remembering one
     /// id is enough to skip them -- no set of every id in the conversation has to be kept.
     last_id: Option<String>,
-    usd: f64,
+    /// When the last counted response happened, so the next one can be told whether it belongs to
+    /// the same run.
+    last_ms: Option<i64>,
+    /// Everything the conversation has ever cost.
+    lifetime: f64,
+    /// Only what has been spent since the last long gap.
+    run: f64,
 }
 
 #[derive(Default)]
@@ -132,60 +171,85 @@ impl Costs {
         Costs::default()
     }
 
-    /// Dollars spent by a session so far, or `None` when it has no transcript to read.
+    /// Dollars spent by a session, or `None` when it has no transcript to read.
     ///
-    /// Cursor sessions never reach here: Cursor records no token usage on disk, so there is nothing
-    /// to add up.
-    pub fn get(&mut self, cwd: &str, session_id: &str) -> Option<f64> {
+    /// `gap_mins` is how long a silence has to be to count as the end of a run. Cursor sessions
+    /// never reach here: Cursor records no token usage on disk, so there is nothing to add up.
+    pub fn get(
+        &mut self,
+        cwd: &str,
+        session_id: &str,
+        scope: CostScope,
+        gap_mins: u64,
+    ) -> Option<f64> {
+        if scope == CostScope::Off {
+            return None;
+        }
         let path = transcript_path(cwd, session_id)?;
         let len = std::fs::metadata(&path).ok()?.len();
 
         let entry = self.cache.entry(session_id.to_string()).or_insert(Cached {
             offset: 0,
             last_id: None,
-            usd: 0.0,
+            last_ms: None,
+            lifetime: 0.0,
+            run: 0.0,
         });
 
         // A transcript that shrank is a different conversation in the same place; start over rather
         // than resume from an offset that now points into the middle of unrelated bytes.
         if len < entry.offset {
-            entry.offset = 0;
-            entry.last_id = None;
-            entry.usd = 0.0;
-        }
-        if len == entry.offset {
-            return Some(entry.usd);
-        }
-
-        let Some(text) = read_from(&path, entry.offset) else {
-            return Some(entry.usd);
-        };
-        // The tail after the last newline is a line still being written. Leaving it unconsumed lets
-        // the next poll read it whole, which is why the offset advances by complete lines only.
-        let complete = match text.rfind('\n') {
-            Some(last) => &text[..=last],
-            None => return Some(entry.usd),
-        };
-
-        for line in complete.lines() {
-            let Ok(parsed) = serde_json::from_str::<Line>(line) else {
-                continue;
+            *entry = Cached {
+                offset: 0,
+                last_id: None,
+                last_ms: None,
+                lifetime: 0.0,
+                run: 0.0,
             };
-            let Some(message) = parsed.message else { continue };
-            let (Some(usage), Some(model)) = (message.usage, message.model) else {
-                continue;
-            };
-            if message.id.is_some() && message.id == entry.last_id {
-                continue;
-            }
-            entry.last_id = message.id;
-            if let Some(price) = price(&model) {
-                entry.usd += usage.dollars(&price);
-            }
         }
 
-        entry.offset += complete.len() as u64;
-        Some(entry.usd)
+        if len > entry.offset
+            && let Some(text) = read_from(&path, entry.offset)
+            // The tail after the last newline is a line still being written. Leaving it unconsumed
+            // lets the next poll read it whole, so the offset advances by complete lines only.
+            && let Some(last) = text.rfind('\n')
+        {
+            let complete = &text[..=last];
+            let gap_ms = (gap_mins.max(1) * 60_000) as i64;
+
+            for line in complete.lines() {
+                let Ok(parsed) = serde_json::from_str::<Line>(line) else {
+                    continue;
+                };
+                let Some(message) = parsed.message else { continue };
+                let (Some(usage), Some(model)) = (message.usage, message.model) else {
+                    continue;
+                };
+                if message.id.is_some() && message.id == entry.last_id {
+                    continue;
+                }
+                entry.last_id = message.id;
+
+                let Some(price) = price(&model) else { continue };
+                let usd = usage.dollars(&price);
+                entry.lifetime += usd;
+
+                // A silence longer than the gap means the context went cold and was rebuilt, which
+                // is exactly where Claude's own report starts counting again.
+                let at = parsed.timestamp.as_deref().and_then(epoch_ms);
+                let fresh = matches!((at, entry.last_ms), (Some(now), Some(prev)) if now - prev > gap_ms);
+                entry.run = if fresh { usd } else { entry.run + usd };
+                if at.is_some() {
+                    entry.last_ms = at;
+                }
+            }
+            entry.offset += complete.len() as u64;
+        }
+
+        Some(match scope {
+            CostScope::Conversation => entry.lifetime,
+            _ => entry.run,
+        })
     }
 
     /// Drops sessions that are no longer running, so the cache cannot grow without bound.
@@ -363,17 +427,40 @@ mod tests {
         state.0
     }
 
-    /// Totals this machine's own sessions.
+    /// Timestamps have to survive the boundaries a naive parser gets wrong.
+    #[test]
+    fn timestamps_become_comparable_instants() {
+        assert_eq!(epoch_ms("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(epoch_ms("2026-09-03T18:32:21.758Z"), Some(1_788_460_341_000));
+        // A minute apart across midnight, a month end and a year end.
+        for (a, b) in [
+            ("2026-09-03T23:59:30Z", "2026-09-04T00:00:30Z"),
+            ("2026-08-31T23:59:30Z", "2026-09-01T00:00:30Z"),
+            ("2026-12-31T23:59:30Z", "2027-01-01T00:00:30Z"),
+            // Across a leap day.
+            ("2028-02-28T23:59:30Z", "2028-02-29T00:00:30Z"),
+        ] {
+            assert_eq!(epoch_ms(b).unwrap() - epoch_ms(a).unwrap(), 60_000, "{a} -> {b}");
+        }
+        assert_eq!(epoch_ms("not a timestamp"), None);
+        assert_eq!(epoch_ms(""), None);
+    }
+
+    /// Totals this machine's own sessions both ways.
     /// `cargo test -- --nocapture live_costs`
     #[test]
     fn live_costs() {
         let mut costs = Costs::new();
         for session in crate::session::Registry::new().scan() {
-            let usd = session
-                .session_id
-                .as_deref()
-                .and_then(|id| costs.get(&session.cwd, id));
-            println!("{} -> {:?}", session.name, usd.map(format));
+            let Some(id) = session.session_id.as_deref() else { continue };
+            let run = costs.get(&session.cwd, id, CostScope::Run, 60);
+            let all = costs.get(&session.cwd, id, CostScope::Conversation, 60);
+            println!(
+                "{:<24} run {:>8}   conversation {:>8}",
+                session.name,
+                run.map(format).unwrap_or_default(),
+                all.map(format).unwrap_or_default()
+            );
         }
     }
 }

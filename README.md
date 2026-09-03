@@ -185,6 +185,18 @@ seeing what the tray can see at all.
 
 The order also decides which rows survive the two row limits, so it is not only cosmetic.
 
+**Cost shown** — *This run.* How much of a conversation the dollar figure on each row adds up.
+- *This run* — spend since the last long gap, which is the number Claude's own usage report gives
+  you. Pick this if you want the two to agree.
+- *Whole conversation* — everything the conversation has cost across every resume. The larger, and
+  often much larger, number: a session picked up over three days reads as `$2.19` for the run and
+  `$9.50` for the conversation.
+- *Off* — no cost column.
+
+A "long gap" is the **Context cache window** below, because that is the same event: the context
+went cold and had to be rebuilt, which is where a new run begins. See
+[What a session has cost](#what-a-session-has-cost).
+
 **Context cache window** — *1 hour.* How long a Claude Code session's context is assumed to stay
 cached, which drives the `cold in 37m` countdown and the *Going cold first* order. **This is your
 figure, not one Claude Code publishes** — see [Going cold](#going-cold). Shorten it if you find
@@ -245,6 +257,7 @@ rather than honoured.
 | `notificationsEnabled` | Show desktop alerts |
 | `notifyStatuses` | Alert me about |
 | `sort` | Sort rows by |
+| `costScope` | Cost shown |
 | `cacheWindowMins` | Context cache window |
 | `maxListRows` | Menu shows at most |
 | `maxAlertRows` | Alert shows at most |
@@ -326,14 +339,36 @@ it out.
 
 **This is what the conversation would cost at published API rates.** It is not a bill. If you reach
 Claude Code through a Max or Pro subscription, you are not charged per token and the number is a
-measure of what you used, not of what you owe. Read it as a sense of weight -- which conversations
+measure of what you used, not of what you owe. Read it as a sense of weight — which conversations
 are expensive, and how much a long agentic run actually consumes.
+
+### Which slice it covers
+
+A conversation is not one continuous run. Claude's own usage report totals **the run you are in**,
+not the whole transcript, so a session resumed over three days reads far cheaper there than it has
+actually cost. The **Cost shown** setting picks which question to answer, and *This run* is the
+default because it is the number that matches what Claude tells you:
+
+```
+Claude/rmsplus-46 · Jira/GitHub codes for SPS, RMS, Predictor    $2.19   <- this run
+                                                                 $9.50   <- whole conversation
+```
+
+A run ends at a silence longer than the **Context cache window**, because that is the same event
+from the other side: the context went cold and had to be rebuilt. Both totals are accumulated in
+one pass over the file, so changing the setting never costs a re-read.
+
+Verified against Claude's own report on this machine: for a session whose report read
+`Cost: $2.19`, *This run* gives `$2.19` and *Whole conversation* gives `$9.50`; for another
+reading `Cost: $5.67`, the run total is `$5.67` against a lifetime of `$194`.
 
 Three details decide whether the figure is right:
 
 * **Cache writes are not priced like input.** The 5-minute TTL costs a quarter more than the input
   rate and the 1-hour TTL costs double, and Claude Code uses both. The transcript breaks the write
-  down by TTL, so each is charged at its own rate rather than averaged.
+  down by TTL, so each is charged at its own rate rather than averaged. This is not a refinement
+  that can be skipped: pricing every write at the flat 1.25× the CLI's own table uses turns a run
+  that Claude reports as `$5.67` into `$5.15`.
 * **Cache reads are a tenth of the input rate** -- a fortieth on Fable. On a long session most of
   the tokens are cache reads, so treating them as input would overstate the total several times
   over.

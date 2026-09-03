@@ -83,6 +83,34 @@ impl Sort {
     }
 }
 
+/// Which slice of a conversation the cost on a row covers.
+///
+/// Claude's own usage report totals the run you are in, not the whole conversation, so a session
+/// resumed over several days reads far cheaper there than its transcript says it has cost. Both
+/// are true; they answer different questions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CostScope {
+    /// Since the last long gap, which is what Claude's usage report shows.
+    Run,
+    /// Everything the conversation has ever cost, across every resume.
+    Conversation,
+    /// No cost column at all.
+    Off,
+}
+
+impl CostScope {
+    pub const ALL: [CostScope; 3] = [CostScope::Run, CostScope::Conversation, CostScope::Off];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CostScope::Run => "This run",
+            CostScope::Conversation => "Whole conversation",
+            CostScope::Off => "Off",
+        }
+    }
+}
+
 /// Statuses that can be chosen as notification triggers, in menu order.
 pub const NOTIFIABLE: [Status; 7] = [
     Status::Waiting,
@@ -192,6 +220,8 @@ pub struct Config {
     /// Minutes a session's context is assumed to stay cached, for the countdown on each row.
     /// `0` leaves the countdown off.
     pub cache_window_mins: u64,
+    /// How much of a conversation the cost on a row adds up.
+    pub cost_scope: CostScope,
 }
 
 impl Default for Config {
@@ -209,6 +239,8 @@ impl Default for Config {
             max_list_rows: 20,
             claude_past_days: 1,
             cache_window_mins: 60,
+            // Matches what Claude's own usage report says, which is the number to hand.
+            cost_scope: CostScope::Run,
         }
     }
 }

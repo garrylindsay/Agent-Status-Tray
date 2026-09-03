@@ -300,7 +300,9 @@ impl Sources {
         // ones would evict each finished session every tick and re-read its whole file on the next.
         for session in &mut sessions {
             if let Some(id) = session.session_id.clone() {
-                session.cost = self.costs.get(&session.cwd, &id);
+                session.cost =
+                    self.costs
+                        .get(&session.cwd, &id, config.cost_scope, config.cache_window_mins);
             }
         }
         let shown: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
