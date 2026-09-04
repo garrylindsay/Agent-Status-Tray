@@ -446,6 +446,37 @@ mod tests {
         assert_eq!(epoch_ms(""), None);
     }
 
+    /// A file this program is reading must stay replaceable by the program that owns it.
+    ///
+    /// This is the whole "display only" claim in one test. Claude Code and Cursor rewrite these
+    /// files constantly, usually by writing a temporary file and renaming it over the old one. On
+    /// Windows an open handle can block exactly that, and the failure would not look like a tray
+    /// bug -- it would look like the other application refusing to start because a file is in use.
+    /// Every read here goes through `read_from`, so proving its handle shares rename and delete
+    /// proves the tray cannot be the thing standing in the way.
+    #[test]
+    fn a_file_being_read_can_still_be_replaced_and_deleted() {
+        let dir = std::env::temp_dir().join(format!("tray-share-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("transcript.jsonl");
+        std::fs::write(&path, b"{}
+").unwrap();
+
+        let held = File::open(&path).expect("open for reading");
+
+        // What an atomic rewrite does: write a new file, then rename it over the open one.
+        let replacement = dir.join("transcript.jsonl.tmp");
+        std::fs::write(&replacement, b"{\"new\":true}
+").unwrap();
+        std::fs::rename(&replacement, &path)
+            .expect("a file the tray is reading must still be replaceable");
+
+        std::fs::remove_file(&path).expect("a file the tray is reading must still be deletable");
+
+        drop(held);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Totals this machine's own sessions both ways.
     /// `cargo test -- --nocapture live_costs`
     #[test]

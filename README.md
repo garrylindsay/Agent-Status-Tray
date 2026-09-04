@@ -384,7 +384,17 @@ Three details decide whether the figure is right:
 
 A model this build has no price for is left out of the total rather than guessed at, so a model
 released after the build shows a figure that is too low rather than one that is wrong in an unknown
-direction. Cursor rows show nothing at all: Cursor records no token usage on disk.
+direction.
+
+**Cursor rows show nothing**, and cannot. Its stores were checked field by field:
+
+| Where | What is there | Why it does not give a cost |
+| --- | --- | --- |
+| Cloud agents (`cloudAgentRepository.agents.*`) | `requestedModel`, `modelDetails` | The model is known and nothing else is — no token counts, no cost |
+| Local chats (`composerData:<id>`) | `usageData.default.costInCents` | Present on 452 of 490 records and **zero on 446 of them**; the six non-zero ones total $0.76 and read `{"costInCents": 16, "amount": 4}` — legacy per-request billing at 4¢ a request, not token cost |
+| Messages (`bubbleId:*`) | `tokenCount.inputTokens` / `outputTokens` | Non-zero on 73 of 5,990 records, and **no model is recorded against them**, so even those cannot be priced |
+
+Pricing Cursor would mean inventing a number, which is the one thing the cost column is not for.
 
 Transcripts only ever grow, so each one is read once and afterwards only from where the last read
 stopped -- there are around 100MB of them on a working machine, and this runs on every poll. The
@@ -488,6 +498,14 @@ $s.Save()
 ```
 
 ## Limitations
+
+- The tray cannot stop another program replacing a file it is reading. Every read opens the file
+  sharing read, write and delete, so Claude Code and Cursor can rewrite or rename their files
+  underneath it — there is a test that holds a file open and then renames and deletes it, because
+  the failure this prevents would not look like a tray bug. If the Claude desktop app refuses to
+  start with *a file is already being used*, that is its own Electron singleton lock at
+  `%APPDATA%\Claude\lockfile`, held by a `claude.exe` that outlived the window; closing the
+  leftover processes releases it.
 
 - Some Claude Code builds do not write a `status` field to the session file at all (observed on
   2.1.247, which advertises a `notify_idle` peer feature and appears to publish status over its
