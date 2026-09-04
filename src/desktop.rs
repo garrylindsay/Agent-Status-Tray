@@ -104,6 +104,14 @@ fn store_dir() -> Option<PathBuf> {
 /// unlimited: a deep recursive scan on every tick would not be worth the state it returns.
 const MAX_DEPTH: usize = 4;
 
+/// Walks the store, holding one directory open for as short a time as possible.
+///
+/// The recursion deliberately happens *after* the directory handle is dropped rather than inside
+/// the iterator. Recursing while enumerating keeps a handle on every level of the path open for as
+/// long as the whole subtree takes to walk, and this tree belongs to another application that is
+/// entitled to rename or delete parts of it at any moment -- on Windows an open directory handle
+/// stops exactly that. Nothing here should ever be the reason the desktop app cannot tidy up its
+/// own folder, and this runs on every poll.
 fn collect(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, u64)>) {
     if depth > MAX_DEPTH {
         return;
@@ -111,10 +119,12 @@ fn collect(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, u64)>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
+
+    let mut subdirs = Vec::new();
     for entry in entries.flatten() {
         let Ok(kind) = entry.file_type() else { continue };
         if kind.is_dir() {
-            collect(&entry.path(), depth + 1, out);
+            subdirs.push(entry.path());
         } else if entry
             .file_name()
             .to_str()
@@ -130,6 +140,11 @@ fn collect(dir: &Path, depth: usize, out: &mut Vec<(PathBuf, u64)>) {
                 .unwrap_or(0);
             out.push((entry.path(), stamp));
         }
+    }
+    // The loop above consumed the iterator, so this level's handle is already closed and the
+    // subtree below is walked without it.
+    for sub in subdirs {
+        collect(&sub, depth + 1, out);
     }
 }
 

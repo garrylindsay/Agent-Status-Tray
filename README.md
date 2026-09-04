@@ -502,10 +502,16 @@ $s.Save()
 - The tray cannot stop another program replacing a file it is reading. Every read opens the file
   sharing read, write and delete, so Claude Code and Cursor can rewrite or rename their files
   underneath it — there is a test that holds a file open and then renames and deletes it, because
-  the failure this prevents would not look like a tray bug. If the Claude desktop app refuses to
-  start with *a file is already being used*, that is its own Electron singleton lock at
-  `%APPDATA%\Claude\lockfile`, held by a `claude.exe` that outlived the window; closing the
-  leftover processes releases it.
+  the failure this prevents would not look like a tray bug. The store walk also drops each
+  directory handle before descending into it, so no part of another application's folder is held
+  open while the rest of it is being read.
+
+  If an application refuses to start because *a file is already being used*, `who-holds-claude.ps1`
+  names the processes actually holding files in its folder. **Run it before closing anything** —
+  the evidence leaves with the holder. On this machine, in steady state, the tray holds nine file
+  handles: its own working directory and eight Windows system resources. None of them is Claude's.
+  Claude's own *a file is already being used* is its Electron singleton lock at
+  `%APPDATA%\Claude\lockfile`, held by a `claude.exe` that outlived its window.
 
 - Some Claude Code builds do not write a `status` field to the session file at all (observed on
   2.1.247, which advertises a `notify_idle` peer feature and appears to publish status over its
