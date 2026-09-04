@@ -222,6 +222,12 @@ pub struct Config {
     pub cache_window_mins: u64,
     /// How much of a conversation the cost on a row adds up.
     pub cost_scope: CostScope,
+    /// Whether to ask Cursor what its conversations cost.
+    ///
+    /// The only thing this program does over the network, and the only one that needs a
+    /// credential -- Cursor's own, read from Cursor's own store at the moment of the call and
+    /// never kept. Off leaves the tray entirely local, which is what it is the rest of the time.
+    pub cursor_cost: bool,
 }
 
 impl Default for Config {
@@ -241,6 +247,7 @@ impl Default for Config {
             cache_window_mins: 60,
             // Matches what Claude's own usage report says, which is the number to hand.
             cost_scope: CostScope::Run,
+            cursor_cost: false,
         }
     }
 }

@@ -12,6 +12,8 @@ mod alert;
 mod config;
 mod cost;
 mod cursor;
+mod http;
+mod log;
 mod desktop;
 mod icon;
 mod liveness;
@@ -21,6 +23,7 @@ mod session;
 mod settings;
 mod theme;
 mod title;
+mod usage;
 
 use std::ptr;
 use std::sync::Mutex;
@@ -35,13 +38,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use alert::Alerter;
-use config::{Config, Sort};
+use config::{Config, CostScope, Sort};
 use cursor::Cursor;
 use desktop::Desktop;
 use notify::{AlertRow, Popup};
 use session::{IconState, Registry, Session, Status};
 use settings::SettingsWindow;
 use cost::Costs;
+use usage::Usage;
 use title::Titles;
 
 const EXIT_ID: &str = "claude-tray-exit";
@@ -256,6 +260,7 @@ struct Sources {
     costs: Costs,
     desktop: Desktop,
     cursor: Cursor,
+    usage: Usage,
 }
 
 impl Sources {
@@ -266,6 +271,7 @@ impl Sources {
             costs: Costs::new(),
             desktop: Desktop::new(),
             cursor: Cursor::new(),
+            usage: Usage::new(),
         }
     }
 
@@ -308,7 +314,20 @@ impl Sources {
         let shown: Vec<String> = sessions.iter().filter_map(|s| s.session_id.clone()).collect();
         self.costs.retain(&shown);
 
-        sessions.extend(self.cursor.sessions(now_ms, config.cursor_local_days));
+        // Cursor keeps no usable cost on disk, so its rows are priced from what Cursor itself
+        // reports. This is on its own slow clock and survives failure: no answer means no cost
+        // column on those rows, which is where they were before.
+        self.usage.refresh(now_ms, config.cursor_cost && config.cost_scope != CostScope::Off);
+
+        let mut cursor_sessions = self.cursor.sessions(now_ms, config.cursor_local_days);
+        for session in &mut cursor_sessions {
+            // A local chat's id is its composer id and a cloud agent's is its bcId; the usage
+            // events name both in the same field.
+            if let Some(id) = session.session_id.as_deref() {
+                session.cost = self.usage.get(id);
+            }
+        }
+        sessions.extend(cursor_sessions);
 
         // Sorted across providers, not within each: a failed Cursor agent outranks an idle Claude
         // session. Ties break on pid so the order cannot shuffle between ticks.

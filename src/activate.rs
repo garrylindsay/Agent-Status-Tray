@@ -9,6 +9,7 @@
 //! lands on is the host's business, and there is no supported way to ask it. See the limitations
 //! in the README.
 
+use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
@@ -185,6 +186,26 @@ fn open_deep_link(uri: &str) {
             ptr::null_mut(),
             verb.as_ptr(),
             uri.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        );
+    }
+}
+
+/// Hands a file to whatever the shell opens that kind of file with.
+pub fn open_path(path: &std::path::Path) {
+    let file: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let verb: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
             ptr::null(),
             ptr::null(),
             windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,

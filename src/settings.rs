@@ -42,7 +42,7 @@ const WIDTH: i32 = 400;
 const PAD: i32 = 16;
 const TITLE_H: i32 = 30;
 const SECTION_H: i32 = 26;
-const ROW_H: i32 = 26;
+const ROW_H: i32 = 24;
 const BUTTON_H: i32 = 32;
 
 // Right-hand cycle control: `< value >`.
@@ -87,6 +87,8 @@ enum Field {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     ToggleEnabled,
+    ToggleCursorCost,
+    OpenLog,
     ToggleStatus(Status),
     /// `+1` for the next value, `-1` for the previous.
     Cycle(Field, i32),
@@ -124,7 +126,7 @@ fn cycle<T: PartialEq + Copy>(choices: &[T], value: T, dir: i32) -> T {
     choices[(at + dir).rem_euclid(len) as usize]
 }
 
-fn layout(config: &Config) -> Vec<Row> {
+fn layout(config: &Config, now_ms: u64, log: &[crate::log::Entry]) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut y = PAD;
 
@@ -196,6 +198,16 @@ fn layout(config: &Config) -> Vec<Row> {
         },
         ROW_H,
         Some(Action::Cycle(Field::Cost, 1)),
+        &mut y,
+    );
+    push(
+        RowKind::Check {
+            label: "Ask Cursor what its chats cost (online)".to_string(),
+            checked: config.cursor_cost,
+            dot: None,
+        },
+        ROW_H,
+        Some(Action::ToggleCursorCost),
         &mut y,
     );
     push(
@@ -287,6 +299,22 @@ fn layout(config: &Config) -> Vec<Row> {
         &mut y,
     );
 
+    // One row, not a section. Everything else this program reads is a local file, where a failure
+    // means one missing row and nothing worth reporting; the Cursor usage call is the exception,
+    // and without somewhere to look an empty cost column is indistinguishable from a free one. The
+    // panel is already the full height of a modest screen, so the entries themselves open
+    // elsewhere rather than pushing the settings off the top of the display.
+    if !log.is_empty() {
+        push(
+            RowKind::Button {
+                label: format!("Open log ({})", log.len()),
+            },
+            BUTTON_H,
+            Some(Action::OpenLog),
+            &mut y,
+        );
+    }
+
     y += 8;
     push(
         RowKind::Button {
@@ -309,6 +337,12 @@ fn panel_height(rows: &[Row]) -> i32 {
 fn apply(action: Action, config: &mut Config) -> bool {
     match action {
         Action::ToggleEnabled => config.notifications_enabled = !config.notifications_enabled,
+        Action::ToggleCursorCost => config.cursor_cost = !config.cursor_cost,
+        // Opens the log for reading; there is no setting to save.
+        Action::OpenLog => {
+            crate::log::open();
+            return false;
+        }
         Action::ToggleStatus(status) => config.toggle_status(status),
         Action::Cycle(Field::Sort, dir) => config.sort = cycle(&Sort::ALL, config.sort, dir),
         Action::Cycle(Field::Cost, dir) => {
@@ -426,7 +460,7 @@ impl SettingsWindow {
 
     /// Opens the panel seeded with the current settings, anchored to the tray corner.
     pub fn open(&self, config: &Config) {
-        let height = panel_height(&layout(config));
+        let height = panel_height(&layout(config, crate::now_ms(), &crate::log::entries()));
 
         STATE.with(|s| {
             let mut s = s.borrow_mut();
@@ -525,7 +559,7 @@ unsafe extern "system" fn wnd_proc(
 
             WM_MOUSEMOVE => {
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
-                let rows = STATE.with(|s| layout(&s.borrow().config));
+                let rows = STATE.with(|s| layout(&s.borrow().config, crate::now_ms(), &crate::log::entries()));
                 let hover = row_at(&rows, y);
                 let changed = STATE.with(|s| {
                     let mut s = s.borrow_mut();
@@ -542,7 +576,7 @@ unsafe extern "system" fn wnd_proc(
             WM_LBUTTONUP => {
                 let x = (lparam & 0xFFFF) as i16 as i32;
                 let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
-                let rows = STATE.with(|s| layout(&s.borrow().config));
+                let rows = STATE.with(|s| layout(&s.borrow().config, crate::now_ms(), &crate::log::entries()));
                 if let Some(index) = row_at(&rows, y)
                     && let Some(action) = rows[index].action
                 {
@@ -626,7 +660,7 @@ unsafe fn paint(hwnd: HWND) {
             (s.config.clone(), s.hover, s.palette)
         });
         let palette = palette.unwrap_or_else(Palette::current);
-        let rows = layout(&config);
+        let rows = layout(&config, 0, &[]);
         let height = panel_height(&rows);
 
         let bg = CreateSolidBrush(palette.background);
@@ -890,7 +924,7 @@ mod tests {
     #[test]
     fn every_actionable_row_is_hit_testable() {
         let config = Config::default();
-        let rows = layout(&config);
+        let rows = layout(&config, 0, &[]);
         for (index, row) in rows.iter().enumerate() {
             if row.action.is_some() {
                 let middle = row.top + row.height / 2;
@@ -902,7 +936,7 @@ mod tests {
     /// Rows must not overlap, or a click would land on the wrong setting.
     #[test]
     fn rows_do_not_overlap() {
-        let rows = layout(&Config::default());
+        let rows = layout(&Config::default(), 0, &[]);
         for pair in rows.windows(2) {
             assert!(pair[1].top >= pair[0].top + pair[0].height);
         }
@@ -948,7 +982,49 @@ mod tests {
     /// corner, so anything taller than this starts running off the top.
     #[test]
     fn the_panel_fits_on_a_modest_screen() {
-        let height = panel_height(&layout(&Config::default()));
+        let height = panel_height(&layout(&Config::default(), 0, &[]));
         assert!(height < 700, "settings panel is {height}px tall");
+    }
+
+    /// The log is the one section that appears out of nowhere, so the panel has to still fit with
+    /// it -- a settings window that runs off the top of the screen when something goes wrong is
+    /// exactly the wrong moment to lose the settings.
+    #[test]
+    fn the_panel_still_fits_with_a_full_log() {
+        let log: Vec<crate::log::Entry> = (0..40)
+            .map(|i| crate::log::Entry {
+                at_ms: i,
+                text: format!("Cursor usage: a fairly wordy failure number {i}"),
+            })
+            .collect();
+        let height = panel_height(&layout(&Config::default(), 100_000, &log));
+        assert!(height < 700, "settings panel with a log is {height}px tall");
+    }
+
+    /// The log row is not there when there is nothing wrong, which is the usual case and the one
+    /// the panel's height is budgeted for.
+    #[test]
+    fn the_log_row_appears_only_when_there_is_a_log() {
+        let has_log = |log: &[crate::log::Entry]| {
+            layout(&Config::default(), 0, log)
+                .iter()
+                .any(|r| matches!(&r.kind, RowKind::Button { label } if label.starts_with("Open log")))
+        };
+        assert!(!has_log(&[]), "a clean run should show no log row");
+        let one = [crate::log::Entry { at_ms: 0, text: "Cursor usage: timed out".into() }];
+        assert!(has_log(&one), "a failure should be reachable from the panel");
+    }
+
+    /// However many entries pile up, the panel gains one row and no more.
+    #[test]
+    fn a_long_log_does_not_grow_the_panel() {
+        let entry = |i: u64| crate::log::Entry { at_ms: i, text: format!("failure {i}") };
+        let one: Vec<_> = (0..1).map(entry).collect();
+        let many: Vec<_> = (0..40).map(entry).collect();
+        assert_eq!(
+            panel_height(&layout(&Config::default(), 0, &many)),
+            panel_height(&layout(&Config::default(), 0, &one)),
+            "a longer log should not make the panel taller"
+        );
     }
 }

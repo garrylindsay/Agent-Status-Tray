@@ -7,8 +7,9 @@ Tray-resident status for every agent session on this machine — **Claude Code**
 **Cursor** cloud agents in one list. Tells you at a glance, without focusing anything, how many are
 running and whether any of them is blocked waiting on you.
 
-Display only. It reads each tool's own files, never writes to them, and never sends them anything.
-Cursor's store is opened read-only.
+Display only. It reads each tool's own files, never writes to them, and Cursor's store is opened
+read-only. It makes exactly one network call, off by default: asking Cursor what its own
+conversations cost — see [What a session has cost](#what-a-session-has-cost).
 
 > Forked from [joshvito/claude-tray](https://github.com/joshvito/claude-tray), which is the Claude
 > Code tray this is built on. This fork adds Cursor as a second source, desktop alerts, a settings
@@ -197,6 +198,11 @@ A "long gap" is the **Context cache window** below, because that is the same eve
 went cold and had to be rebuilt, which is where a new run begins. See
 [What a session has cost](#what-a-session-has-cost).
 
+**Ask Cursor what its chats cost (online)** — *off.* Fetches what Cursor charged for each of its
+conversations, which is the only figure that exists — nothing usable is on disk. The one network
+call this program makes, and the reason it is off until you say so. It stores no credentials; see
+[Asking Cursor](#asking-cursor).
+
 **Context cache window** — *1 hour.* How long a Claude Code session's context is assumed to stay
 cached, which drives the `cold in 37m` countdown and the *Going cold first* order. **This is your
 figure, not one Claude Code publishes** — see [Going cold](#going-cold). Shorten it if you find
@@ -258,6 +264,7 @@ rather than honoured.
 | `notifyStatuses` | Alert me about |
 | `sort` | Sort rows by |
 | `costScope` | Cost shown |
+| `cursorCost` | Ask Cursor what its chats cost |
 | `cacheWindowMins` | Context cache window |
 | `maxListRows` | Menu shows at most |
 | `maxAlertRows` | Alert shows at most |
@@ -386,20 +393,65 @@ A model this build has no price for is left out of the total rather than guessed
 released after the build shows a figure that is too low rather than one that is wrong in an unknown
 direction.
 
-**Cursor rows show nothing**, and cannot. Its stores were checked field by field:
+**Cursor rows are priced by Cursor**, because nothing on disk can price them. Its stores were
+checked field by field first:
 
 | Where | What is there | Why it does not give a cost |
 | --- | --- | --- |
 | Cloud agents (`cloudAgentRepository.agents.*`) | `requestedModel`, `modelDetails` | The model is known and nothing else is — no token counts, no cost |
-| Local chats (`composerData:<id>`) | `usageData.default.costInCents` | Present on 452 of 490 records and **zero on 446 of them**; the six non-zero ones total $0.76 and read `{"costInCents": 16, "amount": 4}` — legacy per-request billing at 4¢ a request, not token cost |
+| Local chats (`composerData:<id>`) | `usageData.default.costInCents` | Present on 452 of 490 records and **zero on 446 of them**; the six non-zero ones total $0.76 and read `{"costInCents": 16, "amount": 4}` — legacy per-request billing at 4¢ a request |
 | Messages (`bubbleId:*`) | `tokenCount.inputTokens` / `outputTokens` | Non-zero on 73 of 5,990 records, and **no model is recorded against them**, so even those cannot be priced |
 
-Pricing Cursor would mean inventing a number, which is the one thing the cost column is not for.
+Pricing that from tokens would mean inventing a number. 
 
 Transcripts only ever grow, so each one is read once and afterwards only from where the last read
 stopped -- there are around 100MB of them on a working machine, and this runs on every poll. The
 running total is kept against every session on show, finished ones included, so nothing is re-read
 from the beginning on the next tick.
+
+### Asking Cursor
+
+The number does exist — on Cursor's own dashboard — and each usage event there names the
+conversation it belongs to. **Ask Cursor what its chats cost (online)** in the settings turns that
+lookup on. It is **off by default**, because it is the only thing this program does over a network.
+
+The join is `conversationId` on each usage event: a bare uuid for a local chat, matching
+`composerData:<id>`, and a `bc-` prefixed one for a cloud agent, matching its `bcId`. Events are
+totalled per conversation.
+
+What it does with credentials matters more than what it fetches:
+
+- Nothing is stored. **No account details go in the tray's config** — no login, no token, no new
+  file. Cursor's own session token already sits in the store this program reads, and it is read at
+  the moment of the call, used, and dropped.
+- The request goes out through **WinHTTP**, so the transport, the TLS and your proxy settings are
+  the operating system's, and no third-party HTTP or TLS crate is trusted with a session token.
+- It runs on its own clock — every ten minutes, not every poll — and backs off to half an hour
+  after a failure, so a dead endpoint or an expired token is not hammered for an answer that is not
+  coming.
+- **Failure is survivable by design.** The last good numbers are kept, because a conversation's
+  cost does not stop being true when the network goes away; if there were never any, Cursor rows
+  simply show no cost, which is where they were before.
+
+The figure is Cursor's own — what it actually charged — so it is **not** comparable with the Claude
+rows, which are API-rate estimates of an unbilled subscription.
+
+Two caveats worth stating plainly. The endpoint is undocumented, so it can change without notice —
+which is what the log is for. And it is refused unless the request looks like it came from the
+dashboard: the token alone returns 403, and it needs the origin and referrer as well as the cookie.
+
+### When it goes wrong
+
+Everything else here reads a local file, where a failure means one missing row and there is nothing
+to say about it. This one call is different, and a cost column that quietly empties looks exactly
+like a set of conversations that cost nothing.
+
+So failures are recorded, and an **Open log (N)** row appears in the settings panel when there is
+anything to see — it is absent on a clean run. It opens a plain text file: the panel already fills
+a modest screen, and a log wants width, wrapping and scrolling that a column of rows cannot give
+it. The log holds the last 40 messages, lives only for the current run, and collapses a repeating
+failure to one entry carrying the time it last happened, so a run of timeouts cannot bury the
+message that explains them.
 
 ## What the desktop app knows
 
